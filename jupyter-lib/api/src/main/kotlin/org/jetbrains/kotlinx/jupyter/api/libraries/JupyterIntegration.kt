@@ -16,6 +16,7 @@ import org.jetbrains.kotlinx.jupyter.api.InterruptionCallback
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelHost
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelVersion
 import org.jetbrains.kotlinx.jupyter.api.Notebook
+import org.jetbrains.kotlinx.jupyter.api.RendererFieldHandler
 import org.jetbrains.kotlinx.jupyter.api.RendererHandler
 import org.jetbrains.kotlinx.jupyter.api.RendererTypeHandler
 import org.jetbrains.kotlinx.jupyter.api.ResultHandlerExecution
@@ -29,6 +30,7 @@ import org.jetbrains.kotlinx.jupyter.api.VariableDeclarationCallback
 import org.jetbrains.kotlinx.jupyter.api.VariableUpdateCallback
 import org.jetbrains.kotlinx.jupyter.util.AcceptanceRule
 import org.jetbrains.kotlinx.jupyter.util.NameAcceptanceRule
+import kotlin.reflect.KProperty
 
 /**
  * Base class for library integration with Jupyter Kernel via DSL
@@ -40,7 +42,7 @@ abstract class JupyterIntegration : LibraryDefinitionProducer {
 
     class Builder(val notebook: Notebook) {
 
-        private val renderers = mutableListOf<RendererHandler>()
+        private val renderers = mutableListOf<RendererFieldHandler>()
 
         private val textRenderers = mutableListOf<TextRendererWithPriority>()
 
@@ -80,6 +82,16 @@ abstract class JupyterIntegration : LibraryDefinitionProducer {
 
         private var _minimalKernelVersion: KotlinKernelVersion? = null
 
+        private val options: MutableMap<String, String> = mutableMapOf()
+
+        private var website: String? = null
+        private var description: String? = null
+
+        fun addRenderer(handler: RendererFieldHandler) {
+            renderers.add(handler)
+        }
+
+        // Left for ABI compatibility
         fun addRenderer(handler: RendererHandler) {
             renderers.add(handler)
         }
@@ -192,18 +204,57 @@ abstract class JupyterIntegration : LibraryDefinitionProducer {
             afterCellExecution.add(callback)
         }
 
+        /**
+         * Runs [callback] for every snippet property of compile-time subtype of type [T]
+         *
+         * [callback] gives access to both runtime value of the property and its [KProperty] object
+         */
         inline fun <reified T : Any> onVariable(noinline callback: VariableDeclarationCallback<T>) {
             addTypeConverter(FieldHandlerFactory.createDeclareHandler(TypeDetection.COMPILE_TIME, callback))
         }
 
+        /**
+         * Runs [callback] for every snippet property of compile-time subtype of type [T]
+         *
+         * [callback] gives access to both runtime value of the property and its [KProperty] object
+         *
+         * [callback] should usually execute some code that:
+         * - has non-Unit result and return the name of result field
+         * - defines some variable and return its name
+         *
+         * Original variable will then be **reassigned** to this new name.
+         *
+         * For example:
+         *
+         * ```
+         * updateVariable<MyType> { value, kProperty ->
+         *     // MyWrapper class should be previously defined in the notebook
+         *     execute("MyWrapper(${kProperty.name})").name
+         * }
+         * ```
+         * or
+         * ```
+         * updateVariable<MyType> { value, kProperty ->
+         *     // MyWrapper class should be previously defined in the notebook
+         *     execute("val wrapper = MyWrapper(${kProperty.name})")
+         *     return "wrapper"
+         * }
+         * ```
+         */
         inline fun <reified T : Any> updateVariable(noinline callback: VariableUpdateCallback<T>) {
             addTypeConverter(FieldHandlerFactory.createUpdateHandler(TypeDetection.COMPILE_TIME, callback))
         }
 
+        /**
+         * Same as [onVariable], but based on runtime type that is figured out by reflection
+         */
         inline fun <reified T : Any> onVariableByRuntimeType(noinline callback: VariableDeclarationCallback<T>) {
             addTypeConverter(FieldHandlerFactory.createDeclareHandler(TypeDetection.RUNTIME, callback))
         }
 
+        /**
+         * Same as [updateVariable], but based on runtime type that is figured out by reflection
+         */
         inline fun <reified T : Any> updateVariableByRuntimeType(noinline callback: VariableUpdateCallback<T>) {
             addTypeConverter(FieldHandlerFactory.createUpdateHandler(TypeDetection.RUNTIME, callback))
         }
@@ -271,8 +322,27 @@ abstract class JupyterIntegration : LibraryDefinitionProducer {
             setMinimalKernelVersion(KotlinKernelVersion.from(version) ?: error("Wrong kernel version format: $version"))
         }
 
+        fun addOption(name: String, value: String) {
+            options[name] = value
+        }
+
+        fun addOptions(options: Map<String, String>) {
+            this.options.putAll(options)
+        }
+
+        fun setDescription(description: String) {
+            this.description = description
+        }
+
+        fun setWebsite(website: String) {
+            this.website = website
+        }
+
         internal fun getDefinition() =
             libraryDefinition {
+                it.description = description
+                it.website = website
+                it.options = options
                 it.init = init
                 it.renderers = renderers
                 it.textRenderers = textRenderers

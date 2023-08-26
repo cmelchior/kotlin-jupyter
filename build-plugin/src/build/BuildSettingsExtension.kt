@@ -15,7 +15,7 @@ import org.gradle.kotlin.dsl.withType
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 class BuildSettingsExtension(private val project: Project) {
-    fun withTests() {
+    fun withTests(configure: Test.() -> Unit = {}) {
         val deps = project.defaultVersionCatalog.dependencies
 
         project.dependencies {
@@ -30,14 +30,27 @@ class BuildSettingsExtension(private val project: Project) {
             testLogging {
                 events("passed", "skipped", "failed")
             }
+            configure()
         }
     }
 
     fun withLanguageLevel(level: String) {
+        withLanguageVersion(level)
+        withApiVersion(level)
+    }
+
+    fun withLanguageVersion(version: String) {
         project.tasks.withType<KotlinCompile> {
             kotlinOptions {
-                apiVersion = level
-                languageVersion = level
+                languageVersion = version
+            }
+        }
+    }
+
+    fun withApiVersion(version: String) {
+        project.tasks.withType<KotlinCompile> {
+            kotlinOptions {
+                apiVersion = version
             }
         }
     }
@@ -61,7 +74,6 @@ class BuildSettingsExtension(private val project: Project) {
         val argsList = KotlinCompilerArgsBuilder().apply(configure).build()
         project.tasks.withType<KotlinCompile> {
             kotlinOptions {
-                @Suppress("SuspiciousCollectionReassignment")
                 freeCompilerArgs += argsList
             }
         }

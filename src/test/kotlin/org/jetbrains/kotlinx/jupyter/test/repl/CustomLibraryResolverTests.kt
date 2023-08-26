@@ -7,15 +7,13 @@ import io.kotest.matchers.types.shouldBeTypeOf
 import jupyter.kotlin.receivers.TempAnnotation
 import jupyter.kotlin.variablesReport
 import kotlinx.serialization.SerializationException
-import org.jetbrains.kotlinx.jupyter.ReplForJupyter
 import org.jetbrains.kotlinx.jupyter.api.DisplayResult
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelVersion.Companion.toMaybeUnspecifiedString
 import org.jetbrains.kotlinx.jupyter.api.MimeTypedResult
+import org.jetbrains.kotlinx.jupyter.api.MimeTypes
 import org.jetbrains.kotlinx.jupyter.api.VariableDeclaration
 import org.jetbrains.kotlinx.jupyter.api.declare
-import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.api.libraries.ResourceType
-import org.jetbrains.kotlinx.jupyter.api.libraries.Variable
 import org.jetbrains.kotlinx.jupyter.api.textResult
 import org.jetbrains.kotlinx.jupyter.defaultRuntimeProperties
 import org.jetbrains.kotlinx.jupyter.exceptions.LibraryProblemPart
@@ -23,13 +21,10 @@ import org.jetbrains.kotlinx.jupyter.exceptions.ReplEvalRuntimeException
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplException
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplLibraryException
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplPreprocessingException
-import org.jetbrains.kotlinx.jupyter.libraries.LibraryResolver
 import org.jetbrains.kotlinx.jupyter.libraries.parseLibraryDescriptor
-import org.jetbrains.kotlinx.jupyter.repl.creating.createRepl
 import org.jetbrains.kotlinx.jupyter.test.evalRaw
 import org.jetbrains.kotlinx.jupyter.test.evalRendered
 import org.jetbrains.kotlinx.jupyter.test.library
-import org.jetbrains.kotlinx.jupyter.test.testRepositories
 import org.jetbrains.kotlinx.jupyter.test.toLibraries
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Test
@@ -42,24 +37,6 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CustomLibraryResolverTests : AbstractReplTest() {
-
-    private fun makeRepl(vararg libs: Pair<String, LibraryDefinition>) = makeRepl(libs.toList().toLibraries())
-
-    private fun makeRepl(libraryResolver: LibraryResolver) = createRepl(
-        resolutionInfoProvider,
-        classpathWithTestLib,
-        homeDir,
-        testRepositories,
-        libraryResolver,
-    )
-
-    private fun testOneLibUsage(definition: LibraryDefinition, args: List<Variable> = emptyList()): ReplForJupyter {
-        val repl = makeRepl("mylib" to definition)
-        val paramList = if (args.isEmpty()) ""
-        else args.joinToString(", ", "(", ")") { "${it.name}=${it.value}" }
-        repl.evalRaw("%use mylib$paramList")
-        return repl
-    }
 
     @Test
     fun testUseMagic() {
@@ -122,7 +99,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
 
         val libs = listOf(lib1, lib2, lib3).toLibraries()
 
-        val executor = makeRepl(libs).mockExecution()
+        val executor = makeReplWithLibraries(libs).mockExecution()
 
         executor.execute("%use mylib(1.0), another")
         val executedCodes = executor.executedCodes
@@ -174,7 +151,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
         """.trimIndent()
 
         val libs = listOf(lib1, lib2).toLibraries()
-        val replWithResolver = makeRepl(libs)
+        val replWithResolver = makeReplWithLibraries(libs)
         replWithResolver.evalRaw("%use mylib, mylib2")
         val results = replWithResolver.evalOnShutdown()
 
@@ -196,7 +173,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
         """.trimIndent()
 
         val libs = listOf(lib).toLibraries()
-        val repl = makeRepl(libs)
+        val repl = makeReplWithLibraries(libs)
 
         repl.evalRaw(
             """
@@ -210,7 +187,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
         val result = repl.evalRendered("13")
 
         result.shouldBeTypeOf<MimeTypedResult>()
-        result["text/html"] shouldBe "<b>26</b>"
+        result[MimeTypes.HTML] shouldBe "<b>26</b>"
     }
 
     @Test
@@ -225,7 +202,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
         """.trimIndent()
 
         val libs = listOf(lib1).toLibraries()
-        val replWithResolver = makeRepl(libs)
+        val replWithResolver = makeReplWithLibraries(libs)
         val exception = assertThrows<ReplPreprocessingException> { replWithResolver.evalRaw("%use mylib") }
 
         val message = exception.message!!
@@ -270,7 +247,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
             }
         }
 
-        val repl = makeRepl(lib1, lib2).trackExecution()
+        val repl = makeReplWithLibraries(lib1, lib2).trackExecution()
 
         val code = """
             %use lib1
@@ -312,7 +289,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
                 scheduleExecution("val b = a")
             }
         }
-        val repl = makeRepl(lib).trackExecution()
+        val repl = makeReplWithLibraries(lib).trackExecution()
 
         repl.execute("1")
 
@@ -390,7 +367,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
     @Test
     fun testLibraryWithIncorrectImport() {
         val e = assertThrows<ReplLibraryException> {
-            testOneLibUsage(
+            makeReplEnablingSingleLibrary(
                 library {
                     import("ru.incorrect")
                 },
@@ -402,7 +379,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
     @Test
     fun testLibraryWithIncorrectDependency() {
         val e = assertThrows<ReplLibraryException> {
-            testOneLibUsage(
+            makeReplEnablingSingleLibrary(
                 library {
                     dependencies("org.foo:bar:42")
                 },
@@ -414,7 +391,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
     @Test
     fun testLibraryWithIncorrectInitCode() {
         val e = assertThrows<ReplLibraryException> {
-            testOneLibUsage(
+            makeReplEnablingSingleLibrary(
                 library {
                     onLoaded {
                         null!!
@@ -427,7 +404,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
 
     @Test
     fun testExceptionInRenderer() {
-        val repl = testOneLibUsage(
+        val repl = makeReplEnablingSingleLibrary(
             library {
                 render<String> { throw IllegalStateException() }
             },
@@ -446,7 +423,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
 
     @Test
     fun testBeforeExecutionException() {
-        val repl = testOneLibUsage(
+        val repl = makeReplEnablingSingleLibrary(
             library {
                 beforeCellExecution {
                     throw NullPointerException()
@@ -461,8 +438,29 @@ class CustomLibraryResolverTests : AbstractReplTest() {
     }
 
     @Test
+    fun `multiple before-cell executions should be executed in the order of declaration`() {
+        val builder = StringBuilder()
+
+        val repl = makeReplEnablingSingleLibrary(
+            library {
+                beforeCellExecution {
+                    builder.append("1")
+                }
+                beforeCellExecution {
+                    builder.append("2")
+                }
+            },
+        )
+
+        repl.evalRaw("0")
+        repl.evalRaw("0")
+
+        builder.toString() shouldBe "1212"
+    }
+
+    @Test
     fun testExceptionRendering() {
-        val repl = testOneLibUsage(
+        val repl = makeReplEnablingSingleLibrary(
             library {
                 renderThrowable<IllegalArgumentException> { textResult(it.message.orEmpty()) }
             },
@@ -485,47 +483,11 @@ class CustomLibraryResolverTests : AbstractReplTest() {
     }
 
     @Test
-    fun testUpdateVariable() {
-        var listInvocationCounter = 0
-
-        val repl = testOneLibUsage(
-            library {
-                onVariable<Any> { _, prop ->
-                    execute("val gen_${prop.name} = 1")
-                }
-                onVariable<List<Int>> { _, _ ->
-                    ++listInvocationCounter
-                }
-            },
-        )
-
-        repl.evalRaw("val ls = listOf(1, 2)")
-
-        repl.evalRaw(
-            """
-            val (a, b) = 1 to 's'
-            val c = "42"
-            """.trimIndent(),
-        )
-
-        val res = repl.evalRaw(
-            """
-            gen_a + gen_b + gen_c
-            """.trimIndent(),
-        )
-        res shouldBe 3
-
-        // List variables updater should be applied only once
-        // because there is only one declaration of the list variable
-        listInvocationCounter shouldBe 1
-    }
-
-    @Test
     @ExperimentalStdlibApi
     fun testLibraryProperties() {
         val mutProp = arrayListOf(1)
 
-        val repl = testOneLibUsage(
+        val repl = makeReplEnablingSingleLibrary(
             library {
                 onLoaded {
                     declare(
@@ -553,7 +515,7 @@ class CustomLibraryResolverTests : AbstractReplTest() {
 
     @Test
     fun testInternalMarkers() {
-        val repl = testOneLibUsage(
+        val repl = makeReplEnablingSingleLibrary(
             library {
                 onLoaded {
                     declare(

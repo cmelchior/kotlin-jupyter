@@ -1,8 +1,10 @@
 package org.jetbrains.kotlinx.jupyter.api
 
 import org.jetbrains.kotlinx.jupyter.api.libraries.ColorScheme
+import org.jetbrains.kotlinx.jupyter.api.libraries.ColorSchemeChangedCallback
 import org.jetbrains.kotlinx.jupyter.api.libraries.CommManager
 import org.jetbrains.kotlinx.jupyter.api.libraries.JupyterConnection
+import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryResolutionRequest
 
 /**
@@ -65,10 +67,13 @@ interface Notebook {
      */
     fun history(before: Int): CodeCell?
 
+    /**
+     * Current color scheme. Works correctly only in Kotlin Notebook plugin
+     */
     val currentColorScheme: ColorScheme?
 
     /**
-     * Change color scheme and run callbacks
+     * Change color scheme and run callbacks. Works correctly only in Kotlin Notebook plugin
      */
     fun changeColorScheme(newScheme: ColorScheme)
 
@@ -114,10 +119,21 @@ interface Notebook {
 
     val fieldsHandlersProcessor: FieldsProcessor
 
+    val beforeCellExecutionsProcessor: ExtensionsProcessor<ExecutionCallback<*>>
+    val afterCellExecutionsProcessor: ExtensionsProcessor<AfterCellExecutionCallback>
+    val shutdownExecutionsProcessor: ExtensionsProcessor<ExecutionCallback<*>>
+
+    val codePreprocessorsProcessor: ExtensionsProcessor<CodePreprocessor>
+    val interruptionCallbacksProcessor: ExtensionsProcessor<InterruptionCallback>
+
+    val colorSchemeChangeCallbacksProcessor: ExtensionsProcessor<ColorSchemeChangedCallback>
+
     /**
      * All requests for libraries made during this session
      */
     val libraryRequests: Collection<LibraryResolutionRequest>
+    val libraryLoader: LibraryLoader
+    fun getLibraryFromDescriptor(descriptorText: String, options: Map<String, String> = emptyMap()): LibraryDefinition
 
     val connection: JupyterConnection
 

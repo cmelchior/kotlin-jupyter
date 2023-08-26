@@ -4,6 +4,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelHost
+import org.jetbrains.kotlinx.jupyter.api.LibraryLoader
 import org.jetbrains.kotlinx.jupyter.api.Notebook
 import org.jetbrains.kotlinx.jupyter.api.TypeName
 import org.jetbrains.kotlinx.jupyter.api.libraries.KOTLIN_JUPYTER_LIBRARIES_FILE_NAME
@@ -20,7 +21,7 @@ import org.jetbrains.kotlinx.jupyter.util.AcceptanceRule
 import org.jetbrains.kotlinx.jupyter.util.accepts
 import org.jetbrains.kotlinx.jupyter.util.unionAcceptance
 
-class LibrariesScanner(val notebook: Notebook) {
+class LibrariesScanner : LibraryLoader {
     private val processedFQNs = mutableSetOf<TypeName>()
     private val discardedFQNs = mutableSetOf<TypeName>()
 
@@ -49,6 +50,7 @@ class LibrariesScanner(val notebook: Notebook) {
     fun addLibrariesFromClassLoader(
         classLoader: ClassLoader,
         host: KotlinKernelHost,
+        notebook: Notebook,
         libraryOptions: Map<String, String> = mapOf(),
         integrationTypeNameRules: List<AcceptanceRule<TypeName>> = listOf(),
     ) {
@@ -57,6 +59,19 @@ class LibrariesScanner(val notebook: Notebook) {
         val libraries = instantiateLibraries(classLoader, scanResult, notebook, libraryOptions)
         log.debug("Number of detected definitions: ${libraries.size}")
         host.addLibraries(libraries)
+    }
+
+    override fun addLibrariesByScanResult(
+        host: KotlinKernelHost,
+        notebook: Notebook,
+        classLoader: ClassLoader,
+        libraryOptions: Map<String, String>,
+        scanResult: LibrariesScanResult,
+    ) {
+        host.scheduleExecution {
+            val libraries = instantiateLibraries(classLoader, scanResult, notebook, libraryOptions)
+            host.addLibraries(libraries)
+        }
     }
 
     private fun scanForLibraries(classLoader: ClassLoader, host: KotlinKernelHost, integrationTypeNameRules: List<AcceptanceRule<TypeName>> = listOf()): LibrariesScanResult {
@@ -88,6 +103,7 @@ class LibrariesScanner(val notebook: Notebook) {
         libraryOptions: Map<String, String>,
     ): List<LibraryDefinition> {
         val definitions = mutableListOf<LibraryDefinition>()
+        val arguments = listOf(notebook, libraryOptions)
 
         fun <T> withErrorsHandling(declaration: LibrariesInstantiable<*>, action: () -> T): T {
             return try {
@@ -99,17 +115,18 @@ class LibrariesScanner(val notebook: Notebook) {
             }
         }
 
-        scanResult.definitions.mapTo(definitions) { declaration ->
+        scanResult.definitions.mapNotNullTo(definitions) { declaration ->
             withErrorsHandling(declaration) {
-                instantiate(classLoader, declaration, notebook, libraryOptions)
+                instantiate(classLoader, declaration, arguments)
             }
         }
 
         scanResult.producers.forEach { declaration ->
             withErrorsHandling(declaration) {
-                val producer = instantiate(classLoader, declaration, notebook, libraryOptions)
-                producer.getDefinitions(notebook).forEach {
-                    definitions.add(it)
+                instantiate(classLoader, declaration, arguments)?.apply {
+                    getDefinitions(notebook).forEach {
+                        definitions.add(it)
+                    }
                 }
             }
         }
@@ -119,32 +136,50 @@ class LibrariesScanner(val notebook: Notebook) {
     private fun <T> instantiate(
         classLoader: ClassLoader,
         data: LibrariesInstantiable<T>,
-        notebook: Notebook,
-        libraryOptions: Map<String, String>,
-    ): T {
+        arguments: List<Any>,
+    ): T? {
         val clazz = classLoader.loadClass(data.fqn)
-        val constructors = clazz.constructors
-
-        if (constructors.isEmpty()) {
-            @Suppress("UNCHECKED_CAST")
-            return clazz.kotlin.objectInstance as T
+        if (clazz == null) {
+            log.warn("Library ${data.fqn} wasn't found in classloader $classLoader")
+            return null
         }
 
-        val constructor = constructors.single()
-
         @Suppress("UNCHECKED_CAST")
-        return when (constructor.parameterCount) {
-            0 -> {
-                constructor.newInstance()
+        return clazz.instantiate(arguments) as T
+    }
+
+    private fun Class<*>.instantiate(arguments: List<Any>): Any {
+        val obj = kotlin.objectInstance
+        if (obj != null) return obj
+
+        val argsCount = arguments.size
+        val myConstructors = constructors
+            .sortedByDescending { it.parameterCount }
+
+        val errorStringBuilder = StringBuilder()
+        for (constructor in myConstructors) {
+            val parameterCount = constructor.parameterCount
+            if (parameterCount > argsCount) {
+                errorStringBuilder.appendLine("\t$constructor: more than $argsCount parameters")
+                continue
             }
-            1 -> {
-                constructor.newInstance(notebook)
+
+            val isSuitable = constructor.parameterTypes
+                .zip(arguments)
+                .all { (paramType, arg) -> paramType.isInstance(arg) }
+
+            if (!isSuitable) {
+                errorStringBuilder.appendLine("\t$constructor: wrong parameter types")
+                continue
             }
-            2 -> {
-                constructor.newInstance(notebook, libraryOptions)
-            }
-            else -> throw IllegalStateException("Only zero, one or two arguments are allowed for library class")
-        } as T
+            return constructor.newInstance(*arguments.take(parameterCount).toTypedArray())
+        }
+
+        val notFoundReason =
+            if (myConstructors.isEmpty()) "no single constructor found"
+            else "no single constructor is applicable\n$errorStringBuilder"
+
+        throw ReplException("No suitable constructor found. Reason: $notFoundReason")
     }
 
     companion object {

@@ -26,6 +26,7 @@ import org.jetbrains.kotlinx.jupyter.repl.ListErrorsResult
 import org.jetbrains.kotlinx.jupyter.test.getOrFail
 import org.jetbrains.kotlinx.jupyter.withPath
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.io.File
 import java.nio.file.Path
 import kotlin.script.experimental.api.SourceCode
@@ -483,14 +484,58 @@ class ReplTests : AbstractSingleReplTest() {
     }
 
     @Test
+    fun testValueClassRendering() {
+        eval(
+            """
+            class Obj(val x: Int)
+
+            @JvmInline
+            value class Wrapper(val o: Obj)
+            """.trimIndent(),
+        )
+
+        eval(
+            """
+            USE {
+                addRenderer(
+                    createRendererByCompileTimeType<Wrapper> { (it.value as Obj).x * 2 }
+                )
+            }
+            """.trimIndent(),
+        )
+
+        val res = eval("Wrapper(Obj(2))").renderedValue
+        res shouldBe 2 * 2
+    }
+
+    @Test
+    fun testParametrizedClassRendering() {
+        eval(
+            """
+            USE {
+                addRenderer(
+                    createRendererByCompileTimeType<List<Int>> { (it.value as List<Int>).map { x -> x * 2 } }
+                )
+            }
+            """.trimIndent(),
+        )
+
+        val res1 = eval("listOf(1, 2)").renderedValue
+        res1 shouldBe listOf(2, 4)
+
+        val res2 = eval("listOf('1', '2')").renderedValue
+        res2 shouldBe listOf('1', '2')
+    }
+
+    @Test
     fun testStdlibJdkExtensionsUsage() {
         eval("USE_STDLIB_EXTENSIONS()")
         val res = eval(
             """
             import kotlin.io.path.*
-            import java.nio.file.Path
+            import java.nio.file.Paths
             
-            Path.of(".").absolute()
+            Paths.get(".").absolute()
             """.trimIndent(),
         ).renderedValue
         res.shouldBeInstanceOf<Path>()
@@ -543,5 +588,17 @@ class ReplTests : AbstractSingleReplTest() {
         eval("val a = 1")
         eval("fun b() = a")
         eval("b()").renderedValue shouldBe 1
+    }
+
+    @Test
+    fun testRegexBug413() {
+        val code = """
+            Regex("(?<x>[0-9]*)").matchEntire("123456789")?.groups?.get("x")?.value
+        """.trimIndent()
+
+        eval(code)
+        assertThrows<ReplEvalRuntimeException> {
+            eval(code)
+        }
     }
 }

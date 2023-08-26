@@ -9,7 +9,7 @@ import org.jetbrains.kotlinx.jupyter.api.FileAnnotationHandler
 import org.jetbrains.kotlinx.jupyter.api.InternalVariablesMarker
 import org.jetbrains.kotlinx.jupyter.api.InterruptionCallback
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelVersion
-import org.jetbrains.kotlinx.jupyter.api.RendererHandler
+import org.jetbrains.kotlinx.jupyter.api.RendererFieldHandler
 import org.jetbrains.kotlinx.jupyter.api.TextRendererWithPriority
 import org.jetbrains.kotlinx.jupyter.api.ThrowableRenderer
 import org.jetbrains.kotlinx.jupyter.util.AcceptanceRule
@@ -25,6 +25,18 @@ interface LibraryDefinition {
      */
     val options: Map<String, String>
         get() = emptyMap()
+
+    /**
+     * Optional textual description of this library
+     */
+    val description: String?
+        get() = null
+
+    /**
+     * Optional link to this library's website
+     */
+    val website: String?
+        get() = null
 
     /**
      * List of artifact dependencies in gradle colon-separated format
@@ -72,7 +84,7 @@ interface LibraryDefinition {
      * List of type renderers. Consider using [org.jetbrains.kotlinx.jupyter.api.Renderable]
      * as it's generally more convenient
      */
-    val renderers: List<RendererHandler>
+    val renderers: List<RendererFieldHandler>
         get() = emptyList()
 
     /**

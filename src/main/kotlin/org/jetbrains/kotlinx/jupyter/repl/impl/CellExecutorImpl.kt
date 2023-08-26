@@ -12,6 +12,7 @@ import org.jetbrains.kotlinx.jupyter.api.libraries.ExecutionHost
 import org.jetbrains.kotlinx.jupyter.api.libraries.KernelRepository
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.api.libraries.libraryDefinition
+import org.jetbrains.kotlinx.jupyter.config.JupyterCompilingOptions
 import org.jetbrains.kotlinx.jupyter.config.catchAll
 import org.jetbrains.kotlinx.jupyter.config.currentKotlinVersion
 import org.jetbrains.kotlinx.jupyter.exceptions.LibraryProblemPart
@@ -24,8 +25,8 @@ import org.jetbrains.kotlinx.jupyter.log
 import org.jetbrains.kotlinx.jupyter.messaging.DisplayHandler
 import org.jetbrains.kotlinx.jupyter.messaging.NoOpDisplayHandler
 import org.jetbrains.kotlinx.jupyter.repl.CellExecutor
-import org.jetbrains.kotlinx.jupyter.repl.ExecutionStartedCallback
 import org.jetbrains.kotlinx.jupyter.repl.InternalEvalResult
+import org.jetbrains.kotlinx.jupyter.repl.workflow.ExecutorWorkflowListener
 import org.jetbrains.kotlinx.jupyter.util.accepts
 import java.util.LinkedList
 import kotlin.reflect.KMutableProperty1
@@ -45,9 +46,10 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
         processAnnotations: Boolean,
         processMagics: Boolean,
         invokeAfterCallbacks: Boolean,
+        isUserCode: Boolean,
         currentCellId: Int,
         stackFrame: ExecutionStackFrame?,
-        callback: ExecutionStartedCallback?,
+        executorWorkflowListener: ExecutorWorkflowListener?,
     ): InternalEvalResult {
         with(replContext) {
             val context = ExecutionContext(replContext, displayHandler, this@CellExecutorImpl, stackFrame.push())
@@ -65,6 +67,7 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
 
                 processedMagics.code
             } else code
+            executorWorkflowListener?.codePreprocessed(preprocessedCode)
 
             if (preprocessedCode.isBlank()) {
                 return InternalEvalResult(FieldValue(Unit, null), Unit)
@@ -72,9 +75,11 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
 
             val result = baseHost.withHost(context) {
                 try {
-                    evaluator.eval(preprocessedCode, currentCellId) { internalId ->
-                        if (callback != null) callback(internalId, preprocessedCode)
-                    }
+                    evaluator.eval(
+                        preprocessedCode,
+                        JupyterCompilingOptions(currentCellId, isUserCode),
+                        executorWorkflowListener,
+                    )
                 } catch (e: ReplException) {
                     if (e.cause is ThreadDeath) {
                         rethrowAsLibraryException(LibraryProblemPart.INTERRUPTION_CALLBACKS) {
@@ -84,11 +89,12 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
                     throw e
                 }
             }
+            var newResultField: FieldValue? = null
             val snippetClass = evaluator.lastKClass
 
             if (processVariables) {
                 log.catchAll {
-                    fieldsProcessor.process(context)
+                    fieldsProcessor.process(context)?.let { newResultField = it }
                 }
             }
 
@@ -100,7 +106,12 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
 
             // TODO: scan classloader only when new classpath was added
             log.catchAll {
-                librariesScanner.addLibrariesFromClassLoader(evaluator.lastClassLoader, context, stackFrame.libraryOptions)
+                librariesScanner.addLibrariesFromClassLoader(
+                    evaluator.lastClassLoader,
+                    context,
+                    notebook,
+                    stackFrame.libraryOptions,
+                )
             }
 
             log.catchAll {
@@ -110,18 +121,12 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
             }
 
             if (invokeAfterCallbacks) {
-                afterCellExecution.forEach {
-                    log.catchAll {
-                        rethrowAsLibraryException(LibraryProblemPart.AFTER_CELL_CALLBACKS) {
-                            it(context, result.scriptInstance, result.result)
-                        }
-                    }
-                }
+                afterCellExecutionsProcessor.process(context, result.scriptInstance, result.result)
             }
 
             context.processExecutionQueue()
 
-            return result
+            return newResultField?.let { field -> result.copy(result = field) } ?: result
         }
     }
 
@@ -165,8 +170,8 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
                 library.fileAnnotations.forEach(sharedContext.fileAnnotationsProcessor::register)
                 library.interruptionCallbacks.forEach(sharedContext.interruptionCallbacksProcessor::register)
                 library.colorSchemeChangedCallbacks.forEach(sharedContext.colorSchemeChangeCallbacksProcessor::register)
-                sharedContext.afterCellExecution.addAll(library.afterCellExecution)
-                sharedContext.codePreprocessor.addAll(library.codePreprocessors)
+                sharedContext.afterCellExecutionsProcessor.registerAll(library.afterCellExecution)
+                sharedContext.codePreprocessor.registerAll(library.codePreprocessors)
 
                 val classLoader = sharedContext.evaluator.lastClassLoader
                 rethrowAsLibraryException(LibraryProblemPart.RESOURCES) {
@@ -176,8 +181,8 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
                     }
                 }
 
-                library.initCell.filter { !sharedContext.beforeCellExecution.contains(it) }.let(sharedContext.beforeCellExecution::addAll)
-                library.shutdown.filter { !sharedContext.shutdownCodes.contains(it) }.let(sharedContext.shutdownCodes::addAll)
+                sharedContext.beforeCellExecutionsProcessor.registerAll(library.initCell)
+                sharedContext.shutdownExecutionsProcessor.registerAll(library.shutdown)
             }
         }
 
@@ -268,6 +273,9 @@ internal class CellExecutorImpl(private val replContext: SharedReplContext) : Ce
             }
             execute(declarations)
         }
+
+        override val lastClassLoader: ClassLoader
+            get() = sharedContext.evaluator.lastClassLoader
 
         companion object {
             private const val TEMP_OBJECT_NAME = "___temp_declarations"

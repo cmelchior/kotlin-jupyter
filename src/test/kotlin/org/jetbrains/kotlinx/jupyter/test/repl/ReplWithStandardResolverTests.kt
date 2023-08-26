@@ -1,16 +1,21 @@
 package org.jetbrains.kotlinx.jupyter.test.repl
 
+import io.kotest.assertions.throwables.shouldNotThrow
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldHaveAtLeastSize
 import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.collections.shouldNotBeEmpty
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotBeBlank
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.intellij.lang.annotations.Language
 import org.jetbrains.kotlinx.jupyter.api.MimeTypedResult
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryResolutionRequest
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplCompilerException
+import org.jetbrains.kotlinx.jupyter.exceptions.ReplPreprocessingException
 import org.jetbrains.kotlinx.jupyter.libraries.AbstractLibraryResolutionInfo
 import org.jetbrains.kotlinx.jupyter.libraries.KERNEL_LIBRARIES
 import org.jetbrains.kotlinx.jupyter.repl.EvalResultEx
@@ -189,6 +194,10 @@ class ReplWithStandardResolverTests : AbstractSingleReplTest() {
 
         includeLib("lib2")
         eval("yyy").renderedValue shouldBe 2
+
+        shouldNotThrow<Throwable> {
+            eval("""loadLibraryProducers("org.jetbrains.test.kotlinx.jupyter.api.Integration1")""")
+        }
     }
 
     @Test
@@ -282,10 +291,35 @@ class ReplWithStandardResolverTests : AbstractSingleReplTest() {
         eval(
             """
             %use dataframe
-            %use ggdsl(v=0.3.2-dev-7)
+            %use kandy(0.4.0-dev-16)
             
             dataFrameConfig
             """.trimIndent(),
         )
+    }
+
+    @Test
+    fun `some options could be ignored`() {
+        eval("%use ___test@experimental(0.1)")
+
+        val exception = shouldThrow<ReplPreprocessingException> {
+            eval("%use ___test@experimental(0.1, 0.2)")
+        }
+
+        exception.message shouldContain "unnamed arguments cannot be more than the number"
+    }
+
+    @Test
+    fun testCompletionForLibraryWithOrderedParameters() {
+        val lib = "ggdsl@src/test/testData/"
+        complete("%use $lib(v|)").matches() shouldHaveSize 0
+        complete("%use $lib(gg|)").matches().single() shouldContain "Version"
+        complete("%use $lib(|)").matches() shouldHaveAtLeastSize 70
+        complete("%use $lib(0.3.2,|)").matches() shouldHaveSize 2
+        complete("%use $lib(v=|").matches() shouldHaveSize 0
+        complete("%use $lib(ggDSLVersion=|").matches().apply {
+            shouldHaveAtLeastSize(70)
+            shouldNotContain("applyColorScheme")
+        }
     }
 }

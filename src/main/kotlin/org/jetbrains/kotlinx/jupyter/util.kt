@@ -2,16 +2,23 @@ package org.jetbrains.kotlinx.jupyter
 
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import org.jetbrains.kotlinx.jupyter.api.Code
 import org.jetbrains.kotlinx.jupyter.api.arrayRenderer
 import org.jetbrains.kotlinx.jupyter.api.bufferedImageRenderer
 import org.jetbrains.kotlinx.jupyter.codegen.ResultsRenderersProcessor
 import org.jetbrains.kotlinx.jupyter.compiler.util.CodeInterval
 import org.jetbrains.kotlinx.jupyter.compiler.util.SourceCodeImpl
 import org.jetbrains.kotlinx.jupyter.config.catchAll
+import org.jetbrains.kotlinx.jupyter.libraries.DefaultLibraryDescriptorGlobalOptions
 import org.jetbrains.kotlinx.jupyter.libraries.KERNEL_LIBRARIES
 import org.jetbrains.kotlinx.jupyter.libraries.LibraryDescriptor
+import org.jetbrains.kotlinx.jupyter.libraries.LibraryDescriptorGlobalOptions
+import org.jetbrains.kotlinx.jupyter.libraries.LibraryDescriptorsProvider
+import org.jetbrains.kotlinx.jupyter.libraries.LibraryResolver
 import org.jetbrains.kotlinx.jupyter.libraries.ResourceLibraryDescriptorsProvider
 import org.jetbrains.kotlinx.jupyter.libraries.parseLibraryDescriptor
+import org.jetbrains.kotlinx.jupyter.libraries.parseLibraryDescriptorGlobalOptions
+import org.jetbrains.kotlinx.jupyter.libraries.parseLibraryReference
 import org.jetbrains.kotlinx.jupyter.util.createCachedFun
 import java.io.File
 import kotlin.script.experimental.api.ScriptDiagnostic
@@ -146,10 +153,40 @@ val libraryDescriptors = createCachedFun(calculateKey = { file: File -> file.abs
     }.toMap()
 }
 
+val descriptorOptions = createCachedFun(calculateKey = { file: File -> file.absolutePath }) { homeDir: File ->
+    val globalOptions = KERNEL_LIBRARIES
+        .homeLibrariesDir(homeDir)
+        .resolve(KERNEL_LIBRARIES.optionsFileName())
+    if (globalOptions.exists()) {
+        parseLibraryDescriptorGlobalOptions(globalOptions.readText())
+    } else {
+        DefaultLibraryDescriptorGlobalOptions
+    }
+}
+
 class HomeDirLibraryDescriptorsProvider(private val homeDir: File?) : ResourceLibraryDescriptorsProvider() {
     override fun getDescriptors(): Map<String, LibraryDescriptor> {
         return if (homeDir == null) super.getDescriptors()
         else libraryDescriptors(homeDir)
+    }
+
+    override fun getDescriptorGlobalOptions(): LibraryDescriptorGlobalOptions {
+        return if (homeDir == null) super.getDescriptorGlobalOptions()
+        else descriptorOptions(homeDir)
+    }
+}
+
+class LibraryDescriptorsByResolutionProvider(
+    private val delegate: LibraryDescriptorsProvider,
+    private val libraryResolver: LibraryResolver,
+) : LibraryDescriptorsProvider by delegate {
+    override fun getDescriptorForVersionsCompletion(fullName: String): LibraryDescriptor? {
+        return super.getDescriptorForVersionsCompletion(fullName)
+            ?: run {
+                val reference = parseLibraryReference(fullName)
+                val descriptorText = libraryResolver.resolve(reference, emptyList())?.originalDescriptorText ?: return@run null
+                parseLibraryDescriptor(descriptorText)
+            }
     }
 }
 
@@ -166,3 +203,11 @@ fun JsonElement.resolvePath(path: List<String>): JsonElement? {
 
     return cur
 }
+
+fun Code.presentableForThreadName(): String {
+    val newName = substringBefore('\n').take(20)
+    return if (newName.length < length) "$newName..."
+    else this
+}
+
+data class MutablePair<T1, T2>(var first: T1, var second: T2)

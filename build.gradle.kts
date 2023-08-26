@@ -1,6 +1,9 @@
 import build.CreateResourcesTask
 import build.PUBLISHING_GROUP
+import build.util.composeOfTaskOutputs
+import build.util.excludeStandardKotlinDependencies
 import build.util.getFlag
+import build.util.registerShadowJarTasksBy
 import build.util.typedProperty
 import org.jetbrains.kotlinx.publisher.apache2
 import org.jetbrains.kotlinx.publisher.developer
@@ -11,6 +14,10 @@ plugins {
 }
 
 val deploy: Configuration by configurations.creating
+
+val kernelShadowed: Configuration by configurations.creating
+val scriptClasspathShadowed: Configuration by configurations.creating
+val ideScriptClasspathShadowed: Configuration by configurations.creating
 
 ktlint {
     filter {
@@ -33,11 +40,11 @@ dependencies {
     implementation(libs.kotlin.dev.scriptingCompilerEmbeddable)
     implementation(libs.kotlin.dev.scriptingIdeServices)
     implementation(libs.kotlin.dev.scriptingDependenciesMavenAll)
-    implementation(libs.kotlin.dev.scriptUtil)
     implementation(libs.kotlin.dev.scriptingCommon)
+    implementation(libs.kotlin.dev.scriptingJvm)
 
     // Embedded version of serialization plugin for notebook code
-    implementation(libs.serialization.dev.embedded)
+    implementation(libs.serialization.dev.embeddedPlugin)
 
     // Logging
     implementation(libs.logging.slf4j.api)
@@ -53,6 +60,7 @@ dependencies {
 
     // Serialization implementation for kernel code
     implementation(libs.serialization.json)
+    implementation(libs.serialization.json5)
 
     // Test dependencies: kotlin-test and Junit 5
     testImplementation(libs.test.junit.params)
@@ -61,6 +69,24 @@ dependencies {
     deploy(projects.lib)
     deploy(projects.api)
     deploy(libs.kotlin.dev.scriptRuntime.get())
+
+    kernelShadowed(projects.kotlinJupyterKernel)
+
+    ideScriptClasspathShadowed(projects.lib) { isTransitive = false }
+    ideScriptClasspathShadowed(projects.api) { isTransitive = false }
+    ideScriptClasspathShadowed(projects.commonDependencies) {
+        excludeStandardKotlinDependencies()
+    }
+    ideScriptClasspathShadowed(libs.kotlin.dev.stdlib)
+    ideScriptClasspathShadowed(libs.kotlin.dev.stdlibCommon)
+
+    scriptClasspathShadowed(projects.lib)
+    scriptClasspathShadowed(projects.api)
+    scriptClasspathShadowed(projects.commonDependencies) {
+        excludeStandardKotlinDependencies()
+    }
+    scriptClasspathShadowed(libs.kotlin.dev.stdlib)
+    scriptClasspathShadowed(libs.kotlin.dev.scriptRuntime)
 }
 
 buildSettings {
@@ -118,6 +144,17 @@ tasks {
         addSingleValueFile("PUBLISHED_JUPYTER_API_VERSION", libs.versions.jupyterApi.get())
     }
 
+    whenTaskAdded {
+        val task = this
+        if (task is GenerateModuleMetadata && task.name == "generateMetadataFileForKernelPublication") {
+            task.dependsOn(shadowJar.get())
+        }
+    }
+
+    dokkaHtmlMultiModule {
+        mustRunAfter(shadowJar.get())
+    }
+
     publishDocs {
         docsRepoUrl.set(rootSettings.docsRepo)
         branchName.set("master")
@@ -125,6 +162,10 @@ tasks {
         email.set("robot@jetbrains.com")
     }
 }
+
+val kernelShadowedJar = tasks.registerShadowJarTasksBy(kernelShadowed, withSources = false)
+val scriptClasspathShadowedJar = tasks.registerShadowJarTasksBy(scriptClasspathShadowed, withSources = true)
+val ideScriptClasspathShadowedJar = tasks.registerShadowJarTasksBy(ideScriptClasspathShadowed, withSources = false)
 
 changelog {
     githubUser = rootSettings.githubRepoUser
@@ -175,5 +216,23 @@ kotlinPublications {
     publication {
         publicationName.set("kernel")
         description.set("Kotlin Jupyter kernel published as artifact")
+    }
+
+    publication {
+        publicationName.set("kernel-shadowed")
+        description.set("Kotlin Jupyter kernel with all dependencies inside one artifact")
+        composeOfTaskOutputs(kernelShadowedJar)
+    }
+
+    publication {
+        publicationName.set("script-classpath-shadowed")
+        description.set("Kotlin Jupyter kernel script classpath with all dependencies inside one artifact")
+        composeOfTaskOutputs(scriptClasspathShadowedJar)
+    }
+
+    publication {
+        publicationName.set("ide-classpath-shadowed")
+        description.set("Kotlin Jupyter kernel script classpath for IDE with all dependencies inside one artifact")
+        composeOfTaskOutputs(ideScriptClasspathShadowedJar)
     }
 }

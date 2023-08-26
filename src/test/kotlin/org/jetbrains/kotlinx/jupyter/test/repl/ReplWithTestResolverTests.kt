@@ -4,9 +4,12 @@ import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.collections.shouldHaveAtLeastSize
 import io.kotest.matchers.collections.shouldHaveSize
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldStartWith
 import org.jetbrains.kotlinx.jupyter.api.MimeTypedResult
+import org.jetbrains.kotlinx.jupyter.api.MimeTypes
 import org.jetbrains.kotlinx.jupyter.test.TestDisplayHandler
 import org.jetbrains.kotlinx.jupyter.test.assertUnit
 import org.junit.jupiter.api.Test
@@ -39,7 +42,7 @@ class ReplWithTestResolverTests : AbstractSingleReplTest() {
         val mime = res2.renderedValue as? MimeTypedResult
         assertNotNull(mime)
         assertEquals(1, mime.size)
-        assertEquals("text/html", mime.entries.first().key)
+        assertEquals(MimeTypes.HTML, mime.entries.first().key)
         assertNotNull(res2.renderedValue)
     }
 
@@ -64,7 +67,7 @@ class ReplWithTestResolverTests : AbstractSingleReplTest() {
         val value = res.renderedValue
         assertTrue(value is MimeTypedResult)
 
-        val html = value["text/html"]!!
+        val html = value[MimeTypes.HTML]!!
         assertTrue(html.contains("Bill"))
 
         res.metadata.newSources.shouldHaveAtLeastSize(3)
@@ -75,11 +78,11 @@ class ReplWithTestResolverTests : AbstractSingleReplTest() {
         eval("SessionOptions.resolveSources = true")
         val res = eval(
             """
-                %use ggdsl(v=0.2.4-dev-1)
+                %use kandy(0.4.0-dev-16)
             """.trimIndent(),
         )
 
-        res.metadata.newSources.shouldHaveSize(85)
+        res.metadata.newSources.shouldHaveSize(84)
     }
 
     @Test
@@ -174,14 +177,14 @@ class ReplWithTestResolverTests : AbstractSingleReplTest() {
 
     @Test
     fun testLibraryCompletion() {
-        completeOrFail("%u", 2).sortedMatches() shouldBe listOf("use", "useLatestDescriptors")
-        completeOrFail("%use kot", 8).sortedMatches() shouldContainAll listOf("kotlin-dl", "kotlin-statistics")
-        with(completeOrFail("%use dataframe(0.8.0-)", 21).sortedMatches()) {
+        complete("%u|").sortedMatches() shouldBe listOf("use", "useLatestDescriptors")
+        complete("%use kot|").sortedMatches() shouldContainAll listOf("kotlin-dl", "kotlin-statistics")
+        with(complete("%use dataframe(0.8.0-|)").sortedMatches()) {
             shouldHaveAtLeastSize(10)
             shouldContain("0.8.0-rc-1")
         }
-        completeOrFail("%use lets-plot, data", 20).sortedMatches() shouldBe listOf("dataframe")
-        with(completeOrFail("%use kotlin-dl(", 15).matches()) {
+        complete("%use lets-plot, data|").sortedMatches() shouldBe listOf("dataframe")
+        with(complete("%use kotlin-dl(|").matches()) {
             last() shouldBe "0.1.1"
 
             // Pre-release version should appear after release version
@@ -191,20 +194,37 @@ class ReplWithTestResolverTests : AbstractSingleReplTest() {
         // Value should be cached, and all these requests should not take much time
         assertTimeout(Duration.ofSeconds(20)) {
             for (i in 1..10000) {
-                completeOrFail("%use kmath(", 11).matches() shouldHaveAtLeastSize 5
+                complete("%use kmath(|").matches() shouldHaveAtLeastSize 5
             }
         }
     }
 
     @Test
     fun testLibraryCompletionWithParams() {
-        completeOrFail("%use kotlin-dl()", 15).matches() shouldHaveAtLeastSize 5
-        completeOrFail("%use kotlin-dl(v =)", 15).matches() shouldHaveSize 0
-        completeOrFail("%use kotlin-dl(v =", 18).matches() shouldHaveAtLeastSize 5
-        completeOrFail("%use kotlin-dl(a =", 18).matches() shouldHaveSize 0
+        complete("%use kotlin-dl(|)").matches() shouldHaveAtLeastSize 5
+        complete("%use kotlin-dl(|v =)").matches() shouldBe listOf("v")
+        complete("%use kotlin-dl(v =|").matches().apply {
+            shouldHaveAtLeastSize(5)
+            shouldNotContain("v")
+        }
+        complete("%use kotlin-dl(a =|").matches() shouldHaveSize 0
 
-        completeOrFail("%use lets-plot(api = ", 21).matches() shouldContain "3.1.0"
-        completeOrFail("%use lets-plot(api = , js", 21).matches() shouldContain "3.1.0"
-        completeOrFail("%use lets-plot(api = 3.1.0, lib = ", 34).matches() shouldContain "2.2.0"
+        complete("%use lets-plot(api = |").matches() shouldContain "3.1.0"
+        complete("%use lets-plot(api = |, js").matches() shouldContain "3.1.0"
+        complete("%use lets-plot(api = 3.1.0, lib = |").matches() shouldContain "2.2.0"
+    }
+
+    @Test
+    fun testTextRenderersOnRealData() {
+        val result = eval(
+            """
+            notebook.textRenderersProcessor.registerDefaultRenderers()
+            val text = java.io.File("src/test/testData/textRenderers/textData.txt").readText()
+            "<!---FUN (.+)-->".toRegex().findAll(text).toList()
+            """.trimIndent(),
+        )
+
+        val html = (result.displayValue as MimeTypedResult)["text/plain"]!!
+        html shouldStartWith "ArrayList[MatcherMatchResult("
     }
 }

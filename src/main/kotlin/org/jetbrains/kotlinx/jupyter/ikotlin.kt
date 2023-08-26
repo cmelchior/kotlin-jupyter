@@ -26,6 +26,7 @@ private fun parseCommandLine(vararg args: String): KernelArgs {
     var homeDir: File? = null
     var debugPort: Int? = null
     var clientType: String? = null
+    var jvmTargetForSnippets: String? = null
     args.forEach { arg ->
         when {
             arg.startsWith("-cp=") || arg.startsWith("-classpath=") -> {
@@ -43,6 +44,9 @@ private fun parseCommandLine(vararg args: String): KernelArgs {
             arg.startsWith("-client=") -> {
                 clientType = arg.substringAfter('=')
             }
+            arg.startsWith("-jvmTarget") -> {
+                jvmTargetForSnippets = arg.substringAfter('=')
+            }
             else -> {
                 cfgFile?.let { throw IllegalArgumentException("config file already set to $it") }
                 cfgFile = File(arg)
@@ -52,7 +56,7 @@ private fun parseCommandLine(vararg args: String): KernelArgs {
     val cfgFileValue = cfgFile ?: throw IllegalArgumentException("config file is not provided")
     if (!cfgFileValue.exists() || !cfgFileValue.isFile) throw IllegalArgumentException("invalid config file $cfgFileValue")
 
-    return KernelArgs(cfgFileValue, classpath ?: emptyList(), homeDir, debugPort, clientType)
+    return KernelArgs(cfgFileValue, classpath ?: emptyList(), homeDir, debugPort, clientType, jvmTargetForSnippets)
 }
 
 fun printClassPath() {
@@ -72,7 +76,8 @@ fun main(vararg args: String) {
         val libraryInfoProvider = getDefaultClasspathResolutionInfoProvider()
         val kernelConfig = kernelArgs.getConfig()
         val replConfig = ReplConfig.create(libraryInfoProvider, kernelArgs.homeDir)
-        kernelServer(kernelConfig, replConfig)
+        val runtimeProperties = createRuntimeProperties(kernelConfig)
+        kernelServer(kernelConfig, replConfig, runtimeProperties)
     } catch (e: Exception) {
         log.error("exception running kernel with args: \"${args.joinToString()}\"", e)
     }
@@ -90,7 +95,7 @@ fun main(vararg args: String) {
 fun embedKernel(cfgFile: File, resolutionInfoProvider: ResolutionInfoProvider?, scriptReceivers: List<Any>? = null) {
     val cp = System.getProperty("java.class.path").split(File.pathSeparator).toTypedArray().map { File(it) }
 
-    val kernelConfig = KernelArgs(cfgFile, cp, null, null, null).getConfig()
+    val kernelConfig = KernelArgs(cfgFile, cp, null, null, null, null).getConfig()
     val replConfig = ReplConfig.create(
         resolutionInfoProvider ?: EmptyResolutionInfoProvider,
         null,
@@ -109,6 +114,7 @@ fun kernelServer(kernelConfig: KernelConfig, replConfig: ReplConfig, runtimeProp
         log.info("Begin listening for events")
 
         val executionCount = AtomicLong(1)
+        val socketManager = conn.socketManager
 
         val commManager = CommManagerImpl(conn)
         val repl = DefaultReplFactory(kernelConfig, replConfig, runtimeProperties, scriptReceivers, conn, commManager).createRepl()
@@ -139,25 +145,25 @@ fun kernelServer(kernelConfig: KernelConfig, replConfig: ReplConfig, runtimeProp
 
         conn.addMessageCallback(
             rawMessageCallback(JupyterSocketType.SHELL, null) { rawMessage ->
-                conn.updateSessionInfo(rawMessage)
+                conn.messageFactory.updateSessionInfo(rawMessage)
                 conn.shellMessagesHandler(rawMessage, repl, commManager, executionCount)
             },
         )
 
         val controlThread = thread {
             socketLoop("Control: Interrupted", mainThread) {
-                conn.control.runCallbacksOnMessage()
+                socketManager.control.runCallbacksOnMessage()
             }
         }
 
         val hbThread = thread {
             socketLoop("Heartbeat: Interrupted", mainThread) {
-                conn.heartbeat.onData { socket.send(it, 0) }
+                socketManager.heartbeat.onData { send(it) }
             }
         }
 
         socketLoop("Main: Interrupted", controlThread, hbThread) {
-            conn.shell.runCallbacksOnMessage()
+            socketManager.shell.runCallbacksOnMessage()
         }
 
         try {

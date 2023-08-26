@@ -1,4 +1,4 @@
-package org.jetbrains.kotlinx.jupyter.test
+package org.jetbrains.kotlinx.jupyter.test.protocol
 
 import ch.qos.logback.classic.Level.DEBUG
 import ch.qos.logback.classic.Level.OFF
@@ -14,16 +14,19 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonPrimitive
 import org.jetbrains.kotlinx.jupyter.LoggingManagement.mainLoggerLevel
+import org.jetbrains.kotlinx.jupyter.api.MimeTypes
 import org.jetbrains.kotlinx.jupyter.api.Notebook
 import org.jetbrains.kotlinx.jupyter.api.SessionOptions
 import org.jetbrains.kotlinx.jupyter.compiler.util.EvaluatedSnippetMetadata
 import org.jetbrains.kotlinx.jupyter.config.currentKotlinVersion
 import org.jetbrains.kotlinx.jupyter.messaging.CommMsg
 import org.jetbrains.kotlinx.jupyter.messaging.CommOpen
+import org.jetbrains.kotlinx.jupyter.messaging.EXECUTION_INTERRUPTED_MESSAGE
 import org.jetbrains.kotlinx.jupyter.messaging.ExecuteReply
 import org.jetbrains.kotlinx.jupyter.messaging.ExecuteRequest
 import org.jetbrains.kotlinx.jupyter.messaging.ExecutionResultMessage
 import org.jetbrains.kotlinx.jupyter.messaging.InputReply
+import org.jetbrains.kotlinx.jupyter.messaging.InterruptRequest
 import org.jetbrains.kotlinx.jupyter.messaging.IsCompleteReply
 import org.jetbrains.kotlinx.jupyter.messaging.IsCompleteRequest
 import org.jetbrains.kotlinx.jupyter.messaging.KernelStatus
@@ -37,6 +40,8 @@ import org.jetbrains.kotlinx.jupyter.messaging.StreamResponse
 import org.jetbrains.kotlinx.jupyter.messaging.jsonObject
 import org.jetbrains.kotlinx.jupyter.protocol.JupyterSocket
 import org.jetbrains.kotlinx.jupyter.protocol.JupyterSocketInfo
+import org.jetbrains.kotlinx.jupyter.test.NotebookMock
+import org.jetbrains.kotlinx.jupyter.test.assertStartsWith
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -66,6 +71,7 @@ class ExecuteTests : KernelServerTestsBase() {
         get() = _context!!
 
     private var shell: JupyterSocket? = null
+    private var control: JupyterSocket? = null
     private var ioPub: JupyterSocket? = null
     private var stdin: JupyterSocket? = null
 
@@ -73,14 +79,17 @@ class ExecuteTests : KernelServerTestsBase() {
         try {
             _context = ZMQ.context(1)
             shell = createClientSocket(JupyterSocketInfo.SHELL).apply {
-                socket.base().setSocketOpt(zmq.ZMQ.ZMQ_REQ_RELAXED, true)
+                makeRelaxed()
             }
             ioPub = createClientSocket(JupyterSocketInfo.IOPUB)
             stdin = createClientSocket(JupyterSocketInfo.STDIN)
-            ioPub?.socket?.subscribe(byteArrayOf())
+            control = createClientSocket(JupyterSocketInfo.CONTROL)
+
+            ioPub?.subscribe(byteArrayOf())
             shell?.connect()
             ioPub?.connect()
             stdin?.connect()
+            control?.connect()
         } catch (e: Throwable) {
             afterEach()
             throw e
@@ -88,12 +97,10 @@ class ExecuteTests : KernelServerTestsBase() {
     }
 
     override fun afterEach() {
-        shell?.close()
-        shell = null
-        ioPub?.close()
-        ioPub = null
-        stdin?.close()
-        stdin = null
+        listOf(::shell, ::ioPub, ::stdin, ::control).forEach { socketProp ->
+            socketProp.get()?.close()
+            socketProp.set(null)
+        }
         context.term()
         _context = null
     }
@@ -102,6 +109,7 @@ class ExecuteTests : KernelServerTestsBase() {
         code: String,
         hasResult: Boolean = true,
         ioPubChecker: (JupyterSocket) -> Unit = {},
+        executeRequestSent: () -> Unit = {},
         executeReplyChecker: (Message) -> Unit = {},
         inputs: List<String> = emptyList(),
         allowStdin: Boolean = true,
@@ -112,6 +120,7 @@ class ExecuteTests : KernelServerTestsBase() {
             val ioPub = this.ioPub!!
             val stdin = this.stdin!!
             shell.sendMessage(MessageType.EXECUTE_REQUEST, content = ExecuteRequest(code, allowStdin = allowStdin, storeHistory = storeHistory))
+            executeRequestSent()
             inputs.forEach {
                 stdin.sendMessage(MessageType.INPUT_REPLY, InputReply(it))
             }
@@ -175,10 +184,22 @@ class ExecuteTests : KernelServerTestsBase() {
         }
     }
 
+    private fun interruptExecution() {
+        control!!.sendMessage(MessageType.INTERRUPT_REQUEST, InterruptRequest())
+    }
+
+    private fun JupyterSocket.receiveStreamResponse(): String {
+        val msg = receiveMessage()
+        assertEquals(MessageType.STREAM, msg.type)
+        val content = msg.content
+        content.shouldBeTypeOf<StreamResponse>()
+        return content.text
+    }
+
     @Test
     fun testExecute() {
         val res = doExecute("2+2") as JsonObject
-        assertEquals("4", res.string("text/plain"))
+        assertEquals("4", res.string(MimeTypes.PLAIN_TEXT))
     }
 
     @Test
@@ -217,11 +238,8 @@ class ExecuteTests : KernelServerTestsBase() {
 
         fun checker(ioPub: JupyterSocket) {
             for (el in expected) {
-                val msg = ioPub.receiveMessage()
-                val content = msg.content
-                assertEquals(MessageType.STREAM, msg.type)
-                assertTrue(content is StreamResponse)
-                assertEquals(el, content.text)
+                val msgText = ioPub.receiveStreamResponse()
+                assertEquals(el, msgText)
             }
         }
 
@@ -231,20 +249,20 @@ class ExecuteTests : KernelServerTestsBase() {
 
     @Test
     fun testOutputStrings() {
+        val repetitions = 5
         val code =
             """
-            for (i in 1..5) {
+            for (i in 1..$repetitions) {
                 Thread.sleep(200)
                 println("text" + i)
             }
             """.trimIndent()
 
         fun checker(ioPub: JupyterSocket) {
-            for (i in 1..5) {
-                val msg = ioPub.receiveMessage()
-                assertEquals(MessageType.STREAM, msg.type)
-                assertEquals("text$i" + System.lineSeparator(), (msg.content as StreamResponse).text)
-            }
+            val lineSeparator = System.lineSeparator()
+            val actualText = (1..repetitions).joinToString("") { ioPub.receiveStreamResponse() }
+            val expectedText = (1..repetitions).joinToString("") { i -> "text$i$lineSeparator" }
+            actualText shouldBe expectedText
         }
 
         val res = doExecute(code, false, ::checker)
@@ -260,7 +278,7 @@ class ExecuteTests : KernelServerTestsBase() {
             answer
             """.trimIndent()
         val res = doExecute(code, inputs = listOf("42"))
-        assertEquals(jsonObject("text/plain" to "42"), res)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "42"), res)
     }
 
     @Test
@@ -331,9 +349,7 @@ class ExecuteTests : KernelServerTestsBase() {
             """.trimIndent(),
             false,
             ioPubChecker = {
-                val msg = it.receiveMessage()
-                assertEquals(MessageType.STREAM, msg.type)
-                val msgText = (msg.content as StreamResponse).text
+                val msgText = it.receiveStreamResponse()
                 assertTrue("The problem is found in one of the loaded libraries" in msgText)
             },
         )
@@ -358,10 +374,10 @@ class ExecuteTests : KernelServerTestsBase() {
             executeReplyChecker = { checkCounter(it, 3) },
         )
 
-        assertEquals(jsonObject("text/plain" to "41"), res1)
-        assertEquals(jsonObject("text/plain" to "42"), res2)
-        assertEquals(jsonObject("text/plain" to "41 42"), res3)
-        assertEquals(jsonObject("text/plain" to "null"), res4)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "41"), res1)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "42"), res2)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "41 42"), res3)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "null"), res4)
     }
 
     @Test
@@ -386,11 +402,11 @@ class ExecuteTests : KernelServerTestsBase() {
         val file = File.createTempFile("kotlin-jupyter-logger-appender-test", ".txt")
         doExecute("%logHandler add f1 --file ${file.absolutePath}", false)
         val result1 = doExecute("2 + 2")
-        assertEquals(jsonObject("text/plain" to "4"), result1)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "4"), result1)
 
         doExecute("%logHandler remove f1", false)
         val result2 = doExecute("3 + 4")
-        assertEquals(jsonObject("text/plain" to "7"), result2)
+        assertEquals(jsonObject(MimeTypes.PLAIN_TEXT to "7"), result2)
 
         val logText = file.readText()
         assertTrue("2 + 2" in logText)
@@ -501,8 +517,24 @@ class ExecuteTests : KernelServerTestsBase() {
     fun testCommand() {
         val res = doExecute(":help")
         res.shouldBeTypeOf<JsonObject>()
-        val text = res["text/plain"]!!.jsonPrimitive.content
+        val text = res[MimeTypes.PLAIN_TEXT]!!.jsonPrimitive.content
         text.shouldContain(currentKotlinVersion)
         print(text)
+    }
+
+    @Test
+    fun testInterrupt() {
+        doExecute(
+            "while(true);",
+            hasResult = false,
+            executeRequestSent = {
+                Thread.sleep(15000)
+                interruptExecution()
+            },
+            ioPubChecker = { iopubSocket ->
+                val msgText = iopubSocket.receiveStreamResponse()
+                msgText shouldBe EXECUTION_INTERRUPTED_MESSAGE
+            },
+        ) shouldBe null
     }
 }

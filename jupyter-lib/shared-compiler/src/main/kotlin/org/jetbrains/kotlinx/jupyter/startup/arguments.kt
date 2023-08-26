@@ -13,6 +13,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.serializer
 import org.jetbrains.kotlinx.jupyter.api.libraries.JupyterSocketType
 import org.jetbrains.kotlinx.jupyter.api.libraries.portField
+import org.jetbrains.kotlinx.jupyter.protocol.HMAC
 import java.io.File
 import java.util.ArrayList
 import java.util.EnumMap
@@ -37,6 +38,7 @@ data class KernelArgs(
     val homeDir: File?,
     val debugPort: Int?,
     val clientType: String?,
+    val jvmTargetForSnippets: String?,
 ) {
     fun parseParams(): KernelJupyterParams {
         return KernelJupyterParams.fromFile(cfgFile)
@@ -52,6 +54,7 @@ data class KernelArgs(
             }
             debugPort?.let { add("-debugPort=$it") }
             clientType?.let { add("-client=$it") }
+            jvmTargetForSnippets?.let { add("-jvmTarget=$it") }
         }
     }
 }
@@ -113,7 +116,12 @@ data class KernelConfig(
     val homeDir: File?,
     val debugPort: Int? = null,
     val clientType: String? = null,
+    val jvmTargetForSnippets: String? = null,
 ) {
+    val hmac by lazy {
+        HMAC(signatureScheme.replace("-", ""), signatureKey)
+    }
+
     fun toArgs(prefix: String = ""): KernelArgs {
         val params = KernelJupyterParams(signatureScheme, signatureKey, ports, transport)
 
@@ -122,7 +130,7 @@ data class KernelConfig(
         val format = Json { prettyPrint = true }
         cfgFile.writeText(format.encodeToString(params))
 
-        return KernelArgs(cfgFile, scriptClasspath, homeDir, debugPort, clientType)
+        return KernelArgs(cfgFile, scriptClasspath, homeDir, debugPort, clientType, jvmTargetForSnippets)
     }
 }
 
@@ -195,5 +203,6 @@ fun KernelArgs.getConfig(): KernelConfig {
         homeDir = homeDir,
         debugPort = debugPort,
         clientType = clientType,
+        jvmTargetForSnippets = jvmTargetForSnippets,
     )
 }

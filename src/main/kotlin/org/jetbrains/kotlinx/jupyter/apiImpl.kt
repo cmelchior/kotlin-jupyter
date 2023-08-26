@@ -1,26 +1,38 @@
 package org.jetbrains.kotlinx.jupyter
 
 import jupyter.kotlin.JavaRuntime
+import org.jetbrains.kotlinx.jupyter.api.AfterCellExecutionCallback
 import org.jetbrains.kotlinx.jupyter.api.CodeCell
+import org.jetbrains.kotlinx.jupyter.api.CodePreprocessor
+import org.jetbrains.kotlinx.jupyter.api.DeclarationInfo
 import org.jetbrains.kotlinx.jupyter.api.DisplayContainer
 import org.jetbrains.kotlinx.jupyter.api.DisplayResult
 import org.jetbrains.kotlinx.jupyter.api.DisplayResultWithCell
+import org.jetbrains.kotlinx.jupyter.api.ExecutionCallback
+import org.jetbrains.kotlinx.jupyter.api.ExtensionsProcessor
 import org.jetbrains.kotlinx.jupyter.api.HtmlData
+import org.jetbrains.kotlinx.jupyter.api.InterruptionCallback
 import org.jetbrains.kotlinx.jupyter.api.JREInfoProvider
 import org.jetbrains.kotlinx.jupyter.api.JupyterClientType
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelVersion
+import org.jetbrains.kotlinx.jupyter.api.LibraryLoader
 import org.jetbrains.kotlinx.jupyter.api.MimeTypedResult
 import org.jetbrains.kotlinx.jupyter.api.Notebook
 import org.jetbrains.kotlinx.jupyter.api.ResultsAccessor
 import org.jetbrains.kotlinx.jupyter.api.VariableState
 import org.jetbrains.kotlinx.jupyter.api.libraries.ColorScheme
+import org.jetbrains.kotlinx.jupyter.api.libraries.ColorSchemeChangedCallback
 import org.jetbrains.kotlinx.jupyter.api.libraries.CommManager
 import org.jetbrains.kotlinx.jupyter.api.libraries.JupyterConnection
+import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryResolutionRequest
+import org.jetbrains.kotlinx.jupyter.api.libraries.Variable
 import org.jetbrains.kotlinx.jupyter.codegen.FieldsProcessorInternal
 import org.jetbrains.kotlinx.jupyter.codegen.ResultsRenderersProcessor
 import org.jetbrains.kotlinx.jupyter.codegen.TextRenderersProcessorWithPreventingRecursion
+import org.jetbrains.kotlinx.jupyter.libraries.parseLibraryDescriptor
 import org.jetbrains.kotlinx.jupyter.repl.impl.SharedReplContext
+import kotlin.properties.Delegates
 
 interface MutableDisplayResultWithCell : DisplayResultWithCell {
     override val cell: MutableCodeCell
@@ -40,6 +52,10 @@ interface MutableDisplayContainer : DisplayContainer {
 
 interface MutableCodeCell : CodeCell {
     var resultVal: Any?
+    override var declarations: List<DeclarationInfo>
+    override var preprocessedCode: String
+    override var internalId: Int
+
     fun appendStreamOutput(output: String)
 
     fun addDisplay(display: DisplayResult)
@@ -52,8 +68,6 @@ interface MutableNotebook : Notebook {
 
     override val displays: MutableDisplayContainer
     fun addCell(
-        internalId: Int,
-        preprocessedCode: String,
         data: EvalData,
     ): MutableCodeCell
 
@@ -121,12 +135,15 @@ class DisplayContainerImpl : MutableDisplayContainer {
 class CodeCellImpl(
     override val notebook: NotebookImpl,
     override val id: Int,
-    override val internalId: Int,
     override val code: String,
-    override val preprocessedCode: String,
     override val prevCell: CodeCell?,
 ) : MutableCodeCell {
     override var resultVal: Any? = null
+    override var internalId by Delegates.notNull<Int>()
+
+    override var declarations: List<DeclarationInfo> = emptyList()
+    override var preprocessedCode by Delegates.notNull<String>()
+
     override val result: Any?
         get() = resultVal
 
@@ -169,6 +186,7 @@ class NotebookImpl(
     override val connection: JupyterConnection,
     override val commManager: CommManager,
     private val explicitClientType: JupyterClientType?,
+    override val libraryLoader: LibraryLoader,
 ) : MutableNotebook {
     private val cells = hashMapOf<Int, MutableCodeCell>()
     override var sharedReplContext: SharedReplContext? = null
@@ -221,11 +239,9 @@ class NotebookImpl(
     }
 
     override fun addCell(
-        internalId: Int,
-        preprocessedCode: String,
         data: EvalData,
     ): MutableCodeCell {
-        val cell = CodeCellImpl(this, data.executionCounter, internalId, data.rawCode, preprocessedCode, lastCell)
+        val cell = CodeCellImpl(this, data.executionCounter, data.rawCode, lastCell)
         cells[data.executionCounter] = cell
         history.add(cell)
         mainCellCreated = true
@@ -267,14 +283,41 @@ class NotebookImpl(
         get() = history(1)
 
     override val renderersProcessor: ResultsRenderersProcessor
-        get() = sharedReplContext?.renderersProcessor ?: throw IllegalStateException("Type renderers processor is not initialized yet")
+        get() = sharedReplContext?.renderersProcessor ?: throwItemNotInitialized("Type renderers processor")
 
     override val textRenderersProcessor: TextRenderersProcessorWithPreventingRecursion
-        get() = sharedReplContext?.textRenderersProcessor ?: throw IllegalStateException("Text renderers processor is not initialized yet")
+        get() = sharedReplContext?.textRenderersProcessor ?: throwItemNotInitialized("Text renderers processor")
 
     override val fieldsHandlersProcessor: FieldsProcessorInternal
-        get() = sharedReplContext?.fieldsProcessor ?: throw IllegalStateException("Fields handlers processor is not initialized yet")
+        get() = sharedReplContext?.fieldsProcessor ?: throwItemNotInitialized("Fields handlers processor")
+
+    override val beforeCellExecutionsProcessor: ExtensionsProcessor<ExecutionCallback<*>>
+        get() = sharedReplContext?.beforeCellExecutionsProcessor ?: throwItemNotInitialized("Before-cell executions processor")
+
+    override val afterCellExecutionsProcessor: ExtensionsProcessor<AfterCellExecutionCallback>
+        get() = sharedReplContext?.afterCellExecutionsProcessor ?: throwItemNotInitialized("After-cell executions processor")
+
+    override val shutdownExecutionsProcessor: ExtensionsProcessor<ExecutionCallback<*>>
+        get() = sharedReplContext?.shutdownExecutionsProcessor ?: throwItemNotInitialized("Shutdown executions processor")
+
+    override val codePreprocessorsProcessor: ExtensionsProcessor<CodePreprocessor>
+        get() = sharedReplContext?.codePreprocessor ?: throwItemNotInitialized("Code preprocessors processor")
+
+    override val interruptionCallbacksProcessor: ExtensionsProcessor<InterruptionCallback>
+        get() = sharedReplContext?.interruptionCallbacksProcessor ?: throwItemNotInitialized("Interruptions callback processor")
+
+    override val colorSchemeChangeCallbacksProcessor: ExtensionsProcessor<ColorSchemeChangedCallback>
+        get() = sharedReplContext?.colorSchemeChangeCallbacksProcessor ?: throwItemNotInitialized("Color scheme change callbacks processor")
+
+    private fun throwItemNotInitialized(itemName: String): Nothing {
+        throw IllegalStateException("$itemName is not initialized yet")
+    }
 
     override val libraryRequests: Collection<LibraryResolutionRequest>
         get() = sharedReplContext?.librariesProcessor?.requests.orEmpty()
+
+    override fun getLibraryFromDescriptor(descriptorText: String, options: Map<String, String>): LibraryDefinition {
+        return parseLibraryDescriptor(descriptorText)
+            .convertToDefinition(options.entries.map { Variable(it.key, it.value) })
+    }
 }
