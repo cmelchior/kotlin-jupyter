@@ -15,7 +15,7 @@ import org.jetbrains.kotlinx.jupyter.api.VariableDeclaration
 import org.jetbrains.kotlinx.jupyter.api.declare
 import org.jetbrains.kotlinx.jupyter.api.libraries.ResourceType
 import org.jetbrains.kotlinx.jupyter.api.textResult
-import org.jetbrains.kotlinx.jupyter.defaultRuntimeProperties
+import org.jetbrains.kotlinx.jupyter.config.defaultRuntimeProperties
 import org.jetbrains.kotlinx.jupyter.exceptions.LibraryProblemPart
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplEvalRuntimeException
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplException
@@ -400,25 +400,6 @@ class CustomLibraryResolverTests : AbstractReplTest() {
             )
         }
         assertEquals(LibraryProblemPart.INIT, e.part)
-    }
-
-    @Test
-    fun testExceptionInRenderer() {
-        val repl = makeReplEnablingSingleLibrary(
-            library {
-                render<String> { throw IllegalStateException() }
-            },
-        )
-
-        repl.evalRaw("42")
-        val res = assertDoesNotThrow {
-            repl.evalRendered(
-                """
-                "42"
-                """.trimIndent(),
-            )
-        }
-        assertNull(res)
     }
 
     @Test

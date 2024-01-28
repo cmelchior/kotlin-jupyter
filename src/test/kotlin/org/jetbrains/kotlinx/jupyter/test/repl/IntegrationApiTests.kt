@@ -6,8 +6,6 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import org.jetbrains.kotlinx.jupyter.EvalRequestData
-import org.jetbrains.kotlinx.jupyter.ReplForJupyter
 import org.jetbrains.kotlinx.jupyter.api.CodePreprocessor
 import org.jetbrains.kotlinx.jupyter.api.DeclarationKind
 import org.jetbrains.kotlinx.jupyter.api.KotlinKernelHost
@@ -23,6 +21,8 @@ import org.jetbrains.kotlinx.jupyter.exceptions.ReplEvalRuntimeException
 import org.jetbrains.kotlinx.jupyter.libraries.EmptyResolutionInfoProvider
 import org.jetbrains.kotlinx.jupyter.libraries.LibraryResolver
 import org.jetbrains.kotlinx.jupyter.libraries.buildDependenciesInitCode
+import org.jetbrains.kotlinx.jupyter.repl.EvalRequestData
+import org.jetbrains.kotlinx.jupyter.repl.ReplForJupyter
 import org.jetbrains.kotlinx.jupyter.repl.creating.createRepl
 import org.jetbrains.kotlinx.jupyter.test.TestDisplayHandler
 import org.jetbrains.kotlinx.jupyter.test.classpath
@@ -35,9 +35,11 @@ import org.jetbrains.kotlinx.jupyter.test.toLibraries
 import org.jetbrains.kotlinx.jupyter.util.EMPTY
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertDoesNotThrow
 import org.junit.jupiter.api.assertThrows
 import kotlin.reflect.KClass
 import kotlin.reflect.full.declaredMemberProperties
+import kotlin.test.assertNull
 
 class IntegrationApiTests {
     private fun makeRepl(libraryResolver: LibraryResolver): ReplForJupyter {
@@ -203,7 +205,7 @@ class IntegrationApiTests {
             """.trimIndent(),
         )
 
-        repl.evalEx("var `Russia is a terrorist state` = true")
+        repl.evalEx("var myVar = true")
 
         displays shouldBe listOf(97, true)
     }
@@ -368,5 +370,28 @@ class IntegrationApiTests {
             @file:DependsOn("my.group:dep:42")
             
         """.trimIndent()
+    }
+
+    @Test
+    fun `exception in renderer should not be fatal`() {
+        val repl = makeRepl()
+
+        repl.eval {
+            addLibrary(
+                createLibrary(repl.notebook) {
+                    render<String> { throw IllegalStateException() }
+                },
+            )
+        }
+
+        repl.evalRaw("42")
+        val res = assertDoesNotThrow {
+            repl.evalRendered(
+                """
+                "42"
+                """.trimIndent(),
+            )
+        }
+        assertNull(res)
     }
 }

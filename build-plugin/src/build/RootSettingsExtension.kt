@@ -9,6 +9,7 @@ import build.util.PyPiTaskSpec
 import build.util.UploadTaskSpecs
 import build.util.defaultVersionCatalog
 import build.util.devKotlin
+import build.util.getBuildDirectory
 import build.util.gradleKotlin
 import build.util.isProtectedBranch
 import build.util.jvmTarget
@@ -107,7 +108,7 @@ class RootSettingsExtension(
     }
 
     val resourcesDir: File = project.file("resources")
-    val distribBuildDir: File = project.buildDir.resolve("distrib-build")
+    val distribBuildDir: File = project.getBuildDirectory().resolve("distrib-build")
     val distribKernelDir: File = distribBuildDir.resolve("kernel")
     val logosDir: File = resourcesDir.resolve("logos")
     val nbExtensionDir: File = resourcesDir.resolve("notebook-extension")
@@ -130,8 +131,6 @@ class RootSettingsExtension(
     val installLibsTaskPrefix: String = "installLibs"
 
     val debuggerPort = project.stringPropOrEmpty("debugPort")
-
-    val runtimePropertiesFile = "runtime.properties"
 
     private val distribUtilsDir: File = project.file("distrib-util")
     val distribUtilRequirementsFile: File = distribUtilsDir.resolve("requirements-common.txt")

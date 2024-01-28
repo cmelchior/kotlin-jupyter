@@ -1,11 +1,13 @@
 [versions]
 jvmTarget = "1.8"
 
-kotlin = "1.9.0"
-stableKotlin = "1.9.0"
-gradleKotlin = "1.9.0"
-ksp = "1.9.0-1.0.12"
+kotlin = "1.9.10"
+kotlinMavenResolver = "1.9.22"
+stableKotlin = "1.9.10"
+gradleKotlin = "1.9.10"
+ksp = "1.9.10-1.0.13"
 shadowJar = "7.1.2"
+shadowJarUtil = "0.1.4-4"
 changelogPlugin = "1.12.1"
 kotlinxSerialization = "1.4.1"
 json5k = "0.3.0"
@@ -14,7 +16,7 @@ jupyterNotebooksParser = "0.1.0-dev-1"
 
 ktlintGradle = "11.0.0"
 ktlint = "0.45.2"
-publishPlugin = "1.8.10-dev-41"
+publishPlugin = "1.8.10-dev-42"
 pluginPublishPlugin = "0.21.0"
 versionsPlugin = "0.44.0"
 
@@ -22,7 +24,7 @@ slf4j = "2.0.5"
 # Beware, newer versions of logback (starting from 1.4.*) are compiled for Java 11 only
 logback = "1.3.6"
 http4k = "4.34.3.0"
-jupyterApi = "0.11.0-208"
+jupyterApi = "0.12.0-105"
 jetbrainsAnnotations = "23.1.0"
 
 junit = "5.9.1"
@@ -50,8 +52,8 @@ kotlin-dev-scriptingCompilerImplUnshaded = { group = "org.jetbrains.kotlin", nam
 kotlin-dev-scriptingCompilerImplEmbeddable = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-compiler-impl-embeddable", version.ref = "kotlin" }
 kotlin-dev-scriptingCompilerEmbeddable = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-compiler-embeddable", version.ref = "kotlin" }
 kotlin-dev-scriptingIdeServices = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-ide-services", version.ref = "kotlin" }
-kotlin-dev-scriptingDependencies = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-dependencies", version.ref = "kotlin" }
-kotlin-dev-scriptingDependenciesMavenAll = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-dependencies-maven-all", version.ref = "kotlin" }
+kotlin-dev-scriptingDependencies = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-dependencies", version.ref = "kotlinMavenResolver" }
+kotlin-dev-scriptingDependenciesMavenAll = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-dependencies-maven-all", version.ref = "kotlinMavenResolver" }
 kotlin-dev-scriptingCommon = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-common", version.ref = "kotlin" }
 kotlin-dev-scriptingJvm = { group = "org.jetbrains.kotlin", name = "kotlin-scripting-jvm", version.ref = "kotlin" }
 kotlin-dev-scriptRuntime = { group = "org.jetbrains.kotlin", name = "kotlin-script-runtime", version.ref = "kotlin" }
@@ -134,6 +136,8 @@ plugin-kotlinJupyterApi = { module = "org.jetbrains.kotlin:kotlin-jupyter-api-gr
 # id("com.github.johnrengelman.shadow")
 plugin-shadowJar = { module = "gradle.plugin.com.github.johnrengelman:shadow", version.ref = "shadowJar" }
 
+plugin-shadowJar-util = { module = "org.jetbrains.gradle:shadow-jar-util", version.ref = "shadowJarUtil" }
+
 # id("org.jlleitschuh.gradle.ktlint")
 plugin-ktlint = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlintGradle" }
 
@@ -166,4 +170,5 @@ allGradlePlugins = [
     "plugin-changelog",
     "plugin-versionsUpdater",
     "plugin-ksp",
+    "plugin-shadowJar-util",
 ]

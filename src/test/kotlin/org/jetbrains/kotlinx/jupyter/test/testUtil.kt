@@ -2,11 +2,6 @@ package org.jetbrains.kotlinx.jupyter.test
 
 import io.kotest.assertions.fail
 import jupyter.kotlin.JavaRuntime
-import org.jetbrains.kotlinx.jupyter.EvalRequestData
-import org.jetbrains.kotlinx.jupyter.MutableCodeCell
-import org.jetbrains.kotlinx.jupyter.MutableNotebook
-import org.jetbrains.kotlinx.jupyter.ReplForJupyter
-import org.jetbrains.kotlinx.jupyter.ReplRuntimeProperties
 import org.jetbrains.kotlinx.jupyter.api.AfterCellExecutionCallback
 import org.jetbrains.kotlinx.jupyter.api.Code
 import org.jetbrains.kotlinx.jupyter.api.CodeCell
@@ -33,7 +28,6 @@ import org.jetbrains.kotlinx.jupyter.api.libraries.ColorScheme
 import org.jetbrains.kotlinx.jupyter.api.libraries.ColorSchemeChangedCallback
 import org.jetbrains.kotlinx.jupyter.api.libraries.CommManager
 import org.jetbrains.kotlinx.jupyter.api.libraries.ExecutionHost
-import org.jetbrains.kotlinx.jupyter.api.libraries.JupyterConnection
 import org.jetbrains.kotlinx.jupyter.api.libraries.JupyterIntegration
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryReference
@@ -41,8 +35,8 @@ import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryResolutionRequest
 import org.jetbrains.kotlinx.jupyter.api.libraries.Variable
 import org.jetbrains.kotlinx.jupyter.api.libraries.createLibrary
 import org.jetbrains.kotlinx.jupyter.api.withId
-import org.jetbrains.kotlinx.jupyter.defaultRepositoriesCoordinates
-import org.jetbrains.kotlinx.jupyter.defaultRuntimeProperties
+import org.jetbrains.kotlinx.jupyter.config.defaultRepositoriesCoordinates
+import org.jetbrains.kotlinx.jupyter.config.defaultRuntimeProperties
 import org.jetbrains.kotlinx.jupyter.libraries.AbstractLibraryResolutionInfo
 import org.jetbrains.kotlinx.jupyter.libraries.ChainedLibraryResolver
 import org.jetbrains.kotlinx.jupyter.libraries.KERNEL_LIBRARIES
@@ -50,10 +44,16 @@ import org.jetbrains.kotlinx.jupyter.libraries.LibraryDescriptor
 import org.jetbrains.kotlinx.jupyter.libraries.LibraryResolver
 import org.jetbrains.kotlinx.jupyter.libraries.parseLibraryDescriptors
 import org.jetbrains.kotlinx.jupyter.log
-import org.jetbrains.kotlinx.jupyter.messaging.CommManagerImpl
+import org.jetbrains.kotlinx.jupyter.messaging.CommunicationFacilityMock
 import org.jetbrains.kotlinx.jupyter.messaging.DisplayHandler
+import org.jetbrains.kotlinx.jupyter.messaging.comms.CommManagerImpl
 import org.jetbrains.kotlinx.jupyter.repl.CompletionResult
-import org.jetbrains.kotlinx.jupyter.repl.creating.MockJupyterConnection
+import org.jetbrains.kotlinx.jupyter.repl.EvalRequestData
+import org.jetbrains.kotlinx.jupyter.repl.ReplForJupyter
+import org.jetbrains.kotlinx.jupyter.repl.ReplRuntimeProperties
+import org.jetbrains.kotlinx.jupyter.repl.creating.ReplComponentsProviderBase
+import org.jetbrains.kotlinx.jupyter.repl.notebook.MutableCodeCell
+import org.jetbrains.kotlinx.jupyter.repl.notebook.MutableNotebook
 import org.jetbrains.kotlinx.jupyter.repl.renderValue
 import java.io.File
 import kotlin.reflect.KClass
@@ -232,7 +232,7 @@ object NotebookMock : Notebook {
     }
 
     override val displays: DisplayContainer
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override fun getAllDisplays(): List<DisplayResultWithCell> {
         return displays.getAll()
@@ -243,18 +243,18 @@ object NotebookMock : Notebook {
     }
 
     override fun history(before: Int): CodeCell? {
-        error("Not supposed to be called")
+        notImplemented()
     }
 
     override val currentColorScheme: ColorScheme?
         get() = null
 
     override fun changeColorScheme(newScheme: ColorScheme) {
-        error("Not supposed to be called")
+        notImplemented()
     }
 
     override fun renderHtmlAsIFrame(data: HtmlData): MimeTypedResult {
-        error("Not supposed to be called")
+        notImplemented()
     }
 
     override val kernelVersion: KotlinKernelVersion
@@ -263,49 +263,52 @@ object NotebookMock : Notebook {
         get() = JavaRuntime
 
     override val renderersProcessor: RenderersProcessor
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val textRenderersProcessor: TextRenderersProcessor
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val fieldsHandlersProcessor: FieldsProcessor
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val beforeCellExecutionsProcessor: ExtensionsProcessor<ExecutionCallback<*>>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val afterCellExecutionsProcessor: ExtensionsProcessor<AfterCellExecutionCallback>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val shutdownExecutionsProcessor: ExtensionsProcessor<ExecutionCallback<*>>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val codePreprocessorsProcessor: ExtensionsProcessor<CodePreprocessor>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
     override val interruptionCallbacksProcessor: ExtensionsProcessor<InterruptionCallback>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
     override val colorSchemeChangeCallbacksProcessor: ExtensionsProcessor<ColorSchemeChangedCallback>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val libraryRequests: Collection<LibraryResolutionRequest>
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override val libraryLoader: LibraryLoader
-        get() = error("Not supposed to be called")
+        get() = notImplemented()
 
     override fun getLibraryFromDescriptor(descriptorText: String, options: Map<String, String>): LibraryDefinition {
+        notImplemented()
+    }
+
+    private fun notImplemented(): Nothing {
         error("Not supposed to be called")
     }
 
     override val jupyterClientType: JupyterClientType
         get() = JupyterClientType.UNKNOWN
 
-    override val connection: JupyterConnection
-        get() = MockJupyterConnection
-
     override val commManager: CommManager
-        get() = CommManagerImpl(MockJupyterConnection)
+        get() = CommManagerImpl(CommunicationFacilityMock)
 }
+
+object ReplComponentsProviderMock : ReplComponentsProviderBase()
 
 fun library(builder: JupyterIntegration.Builder.() -> Unit) = createLibrary(NotebookMock, builder)
 

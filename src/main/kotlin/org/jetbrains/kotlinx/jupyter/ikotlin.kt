@@ -2,19 +2,30 @@ package org.jetbrains.kotlinx.jupyter
 
 import org.jetbrains.kotlinx.jupyter.api.libraries.JupyterSocketType
 import org.jetbrains.kotlinx.jupyter.api.libraries.rawMessageCallback
+import org.jetbrains.kotlinx.jupyter.config.createRuntimeProperties
+import org.jetbrains.kotlinx.jupyter.execution.JupyterExecutor
+import org.jetbrains.kotlinx.jupyter.execution.JupyterExecutorImpl
 import org.jetbrains.kotlinx.jupyter.libraries.EmptyResolutionInfoProvider
 import org.jetbrains.kotlinx.jupyter.libraries.ResolutionInfoProvider
 import org.jetbrains.kotlinx.jupyter.libraries.getDefaultClasspathResolutionInfoProvider
-import org.jetbrains.kotlinx.jupyter.messaging.CommManagerImpl
+import org.jetbrains.kotlinx.jupyter.messaging.JupyterBaseSockets
+import org.jetbrains.kotlinx.jupyter.messaging.JupyterCommunicationFacility
+import org.jetbrains.kotlinx.jupyter.messaging.JupyterCommunicationFacilityImpl
+import org.jetbrains.kotlinx.jupyter.messaging.JupyterConnectionImpl
 import org.jetbrains.kotlinx.jupyter.messaging.JupyterConnectionInternal
-import org.jetbrains.kotlinx.jupyter.messaging.controlMessagesHandler
-import org.jetbrains.kotlinx.jupyter.messaging.shellMessagesHandler
-import org.jetbrains.kotlinx.jupyter.repl.creating.DefaultReplFactory
+import org.jetbrains.kotlinx.jupyter.messaging.MessageFactoryProvider
+import org.jetbrains.kotlinx.jupyter.messaging.MessageFactoryProviderImpl
+import org.jetbrains.kotlinx.jupyter.messaging.MessageHandler
+import org.jetbrains.kotlinx.jupyter.messaging.MessageHandlerImpl
+import org.jetbrains.kotlinx.jupyter.messaging.comms.CommManagerImpl
+import org.jetbrains.kotlinx.jupyter.messaging.comms.CommManagerInternal
+import org.jetbrains.kotlinx.jupyter.repl.ReplConfig
+import org.jetbrains.kotlinx.jupyter.repl.config.DefaultReplSettings
+import org.jetbrains.kotlinx.jupyter.repl.creating.DefaultReplComponentsProvider
+import org.jetbrains.kotlinx.jupyter.repl.creating.createRepl
 import org.jetbrains.kotlinx.jupyter.startup.KernelArgs
-import org.jetbrains.kotlinx.jupyter.startup.KernelConfig
 import org.jetbrains.kotlinx.jupyter.startup.getConfig
 import java.io.File
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlin.script.experimental.jvm.util.classpathFromClassloader
 
@@ -77,7 +88,8 @@ fun main(vararg args: String) {
         val kernelConfig = kernelArgs.getConfig()
         val replConfig = ReplConfig.create(libraryInfoProvider, kernelArgs.homeDir)
         val runtimeProperties = createRuntimeProperties(kernelConfig)
-        kernelServer(kernelConfig, replConfig, runtimeProperties)
+        val replSettings = DefaultReplSettings(kernelConfig, replConfig, runtimeProperties)
+        kernelServer(replSettings)
     } catch (e: Exception) {
         log.error("exception running kernel with args: \"${args.joinToString()}\"", e)
     }
@@ -101,23 +113,35 @@ fun embedKernel(cfgFile: File, resolutionInfoProvider: ResolutionInfoProvider?, 
         null,
         true,
     )
-    kernelServer(kernelConfig, replConfig, scriptReceivers = scriptReceivers ?: emptyList())
+    val replSettings = DefaultReplSettings(kernelConfig, replConfig, scriptReceivers = scriptReceivers.orEmpty())
+    kernelServer(replSettings)
 }
 
-fun kernelServer(kernelConfig: KernelConfig, replConfig: ReplConfig, runtimeProperties: ReplRuntimeProperties = defaultRuntimeProperties, scriptReceivers: List<Any> = emptyList()) {
+fun createMessageHandler(
+    replSettings: DefaultReplSettings,
+    socketManager: JupyterBaseSockets,
+): MessageHandler {
+    val messageFactoryProvider: MessageFactoryProvider = MessageFactoryProviderImpl()
+    val communicationFacility: JupyterCommunicationFacility = JupyterCommunicationFacilityImpl(socketManager, messageFactoryProvider)
+
+    val executor: JupyterExecutor = JupyterExecutorImpl()
+
+    val commManager: CommManagerInternal = CommManagerImpl(communicationFacility)
+    val repl = DefaultReplComponentsProvider(replSettings, communicationFacility, commManager).createRepl()
+    return MessageHandlerImpl(repl, commManager, messageFactoryProvider, socketManager, executor)
+}
+
+fun kernelServer(replSettings: DefaultReplSettings) {
+    val kernelConfig = replSettings.kernelConfig
     log.info("Starting server with config: $kernelConfig")
 
     JupyterConnectionImpl(kernelConfig).use { conn: JupyterConnectionInternal ->
-
         printClassPath()
 
         log.info("Begin listening for events")
 
-        val executionCount = AtomicLong(1)
         val socketManager = conn.socketManager
-
-        val commManager = CommManagerImpl(conn)
-        val repl = DefaultReplFactory(kernelConfig, replConfig, runtimeProperties, scriptReceivers, conn, commManager).createRepl()
+        val messageHandler = createMessageHandler(replSettings, socketManager)
 
         val mainThread = Thread.currentThread()
 
@@ -139,14 +163,13 @@ fun kernelServer(kernelConfig: KernelConfig, replConfig: ReplConfig, runtimeProp
 
         conn.addMessageCallback(
             rawMessageCallback(JupyterSocketType.CONTROL, null) { rawMessage ->
-                conn.controlMessagesHandler(rawMessage, repl)
+                messageHandler.handleMessage(JupyterSocketType.CONTROL, rawMessage)
             },
         )
 
         conn.addMessageCallback(
             rawMessageCallback(JupyterSocketType.SHELL, null) { rawMessage ->
-                conn.messageFactory.updateSessionInfo(rawMessage)
-                conn.shellMessagesHandler(rawMessage, repl, commManager, executionCount)
+                messageHandler.handleMessage(JupyterSocketType.SHELL, rawMessage)
             },
         )
 

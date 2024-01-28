@@ -1,22 +1,22 @@
 package org.jetbrains.kotlinx.jupyter.test.repl
 
 import kotlinx.coroutines.runBlocking
-import org.jetbrains.kotlinx.jupyter.MutableNotebook
-import org.jetbrains.kotlinx.jupyter.ReplForJupyter
-import org.jetbrains.kotlinx.jupyter.ReplForJupyterImpl
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.api.libraries.Variable
 import org.jetbrains.kotlinx.jupyter.libraries.EmptyResolutionInfoProvider
 import org.jetbrains.kotlinx.jupyter.libraries.LibraryResolver
 import org.jetbrains.kotlinx.jupyter.libraries.getDefaultClasspathResolutionInfoProvider
 import org.jetbrains.kotlinx.jupyter.libraries.getStandardResolver
+import org.jetbrains.kotlinx.jupyter.messaging.CommunicationFacilityMock
 import org.jetbrains.kotlinx.jupyter.messaging.DisplayHandler
 import org.jetbrains.kotlinx.jupyter.messaging.NoOpDisplayHandler
 import org.jetbrains.kotlinx.jupyter.repl.CompletionResult
 import org.jetbrains.kotlinx.jupyter.repl.ListErrorsResult
-import org.jetbrains.kotlinx.jupyter.repl.creating.BaseReplFactory
-import org.jetbrains.kotlinx.jupyter.repl.creating.MockJupyterConnection
+import org.jetbrains.kotlinx.jupyter.repl.ReplForJupyter
+import org.jetbrains.kotlinx.jupyter.repl.creating.ReplComponentsProviderBase
 import org.jetbrains.kotlinx.jupyter.repl.creating.createRepl
+import org.jetbrains.kotlinx.jupyter.repl.impl.ReplForJupyterImpl
+import org.jetbrains.kotlinx.jupyter.repl.notebook.MutableNotebook
 import org.jetbrains.kotlinx.jupyter.test.classPathEntry
 import org.jetbrains.kotlinx.jupyter.test.classpath
 import org.jetbrains.kotlinx.jupyter.test.evalRaw
@@ -27,7 +27,7 @@ import org.jetbrains.kotlinx.jupyter.test.toLibraries
 import java.io.File
 
 abstract class AbstractReplTest {
-    val classpathWithTestLib = buildList {
+    private val classpathWithTestLib = buildList {
         addAll(classpath)
         add(classPathEntry<AbstractReplTest>())
         add(classPathEntry<ReplForJupyterImpl>())
@@ -67,7 +67,7 @@ abstract class AbstractReplTest {
         val standardResolutionInfoProvider = getDefaultClasspathResolutionInfoProvider()
         val resolver = getStandardResolver(".", standardResolutionInfoProvider)
         val myHomeDir = homeDir
-        val factory = object : BaseReplFactory() {
+        val factory = object : ReplComponentsProviderBase() {
             override fun provideResolutionInfoProvider() = standardResolutionInfoProvider
             override fun provideScriptClasspath() = classpath
             override fun provideHomeDir() = myHomeDir
@@ -77,7 +77,7 @@ abstract class AbstractReplTest {
             override fun provideScriptReceivers() = emptyList<Any>()
             override fun provideIsEmbedded() = false
             override fun provideDisplayHandler() = displayHandlerProvider(notebook)
-            override fun provideConnection() = MockJupyterConnection
+            override fun provideCommunicationFacility() = CommunicationFacilityMock
             override fun provideDebugPort(): Int? = null
         }
         return factory.createRepl()

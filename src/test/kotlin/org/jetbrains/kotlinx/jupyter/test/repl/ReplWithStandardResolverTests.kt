@@ -147,7 +147,7 @@ class ReplWithStandardResolverTests : AbstractSingleReplTest() {
         res.shouldBeInstanceOf<List<LibraryResolutionRequest>>()
         res.shouldHaveSize(3)
 
-        val expectedLibs = listOf("default", "dataframe", "lets-plot-dataframe")
+        val expectedLibs = listOf("default", "dataframe", "kandy")
         for (i in res.indices) {
             res[i].reference.name shouldBe expectedLibs[i]
             res[i].definition.originalDescriptorText.shouldNotBeBlank()
@@ -296,6 +296,18 @@ class ReplWithStandardResolverTests : AbstractSingleReplTest() {
             dataFrameConfig
             """.trimIndent(),
         )
+    }
+
+    @Test
+    fun testGGDslSourcesResolution() {
+        eval("SessionOptions.resolveSources = true")
+        val res = eval(
+            """
+                %use kandy@d768defdeecace77d118db0f77455970eef4a800(0.4.0-dev-16)
+            """.trimIndent(),
+        )
+
+        res.metadata.newSources.shouldHaveSize(84)
     }
 
     @Test

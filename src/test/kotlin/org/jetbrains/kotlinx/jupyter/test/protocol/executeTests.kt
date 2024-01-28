@@ -7,7 +7,6 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeTypeOf
 import jupyter.kotlin.providers.UserHandlesProvider
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -21,6 +20,7 @@ import org.jetbrains.kotlinx.jupyter.compiler.util.EvaluatedSnippetMetadata
 import org.jetbrains.kotlinx.jupyter.config.currentKotlinVersion
 import org.jetbrains.kotlinx.jupyter.messaging.CommMsg
 import org.jetbrains.kotlinx.jupyter.messaging.CommOpen
+import org.jetbrains.kotlinx.jupyter.messaging.DisplayDataResponse
 import org.jetbrains.kotlinx.jupyter.messaging.EXECUTION_INTERRUPTED_MESSAGE
 import org.jetbrains.kotlinx.jupyter.messaging.ExecuteReply
 import org.jetbrains.kotlinx.jupyter.messaging.ExecuteRequest
@@ -37,13 +37,15 @@ import org.jetbrains.kotlinx.jupyter.messaging.OpenDebugPortReply
 import org.jetbrains.kotlinx.jupyter.messaging.ProvidedCommMessages
 import org.jetbrains.kotlinx.jupyter.messaging.StatusReply
 import org.jetbrains.kotlinx.jupyter.messaging.StreamResponse
-import org.jetbrains.kotlinx.jupyter.messaging.jsonObject
 import org.jetbrains.kotlinx.jupyter.protocol.JupyterSocket
 import org.jetbrains.kotlinx.jupyter.protocol.JupyterSocketInfo
+import org.jetbrains.kotlinx.jupyter.protocol.MessageFormat
 import org.jetbrains.kotlinx.jupyter.test.NotebookMock
 import org.jetbrains.kotlinx.jupyter.test.assertStartsWith
+import org.jetbrains.kotlinx.jupyter.util.jsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.parallel.Execution
@@ -188,12 +190,20 @@ class ExecuteTests : KernelServerTestsBase() {
         control!!.sendMessage(MessageType.INTERRUPT_REQUEST, InterruptRequest())
     }
 
-    private fun JupyterSocket.receiveStreamResponse(): String {
+    private inline fun <reified T : Any> JupyterSocket.receiveMessageOfType(messageType: MessageType): T {
         val msg = receiveMessage()
-        assertEquals(MessageType.STREAM, msg.type)
+        assertEquals(messageType, msg.type)
         val content = msg.content
-        content.shouldBeTypeOf<StreamResponse>()
-        return content.text
+        content.shouldBeTypeOf<T>()
+        return content
+    }
+
+    private fun JupyterSocket.receiveStreamResponse(): String {
+        return receiveMessageOfType<StreamResponse>(MessageType.STREAM).text
+    }
+
+    private fun JupyterSocket.receiveDisplayDataResponse(): DisplayDataResponse {
+        return receiveMessageOfType(MessageType.DISPLAY_DATA)
     }
 
     @Test
@@ -300,7 +310,7 @@ class ExecuteTests : KernelServerTestsBase() {
             executeReplyChecker = { message ->
                 val metadata = message.data.metadata
                 assertTrue(metadata is JsonObject)
-                val snippetMetadata = Json.decodeFromJsonElement<EvaluatedSnippetMetadata?>(
+                val snippetMetadata = MessageFormat.decodeFromJsonElement<EvaluatedSnippetMetadata?>(
                     metadata["eval_metadata"] ?: JsonNull,
                 )
                 val compiledData = snippetMetadata?.compiledData
@@ -505,7 +515,7 @@ class ExecuteTests : KernelServerTestsBase() {
         iopub.wrapActionInBusyIdleStatusChange {
             iopub.receiveMessage().apply {
                 val c = content.shouldBeTypeOf<CommMsg>()
-                val data = Json.decodeFromJsonElement<OpenDebugPortReply>(c.data).shouldBeTypeOf<OpenDebugPortReply>()
+                val data = MessageFormat.decodeFromJsonElement<OpenDebugPortReply>(c.data).shouldBeTypeOf<OpenDebugPortReply>()
                 c.commId shouldBe commId
                 data.port shouldBe actualDebugPort
                 data.status shouldBe MessageStatus.OK
@@ -536,5 +546,20 @@ class ExecuteTests : KernelServerTestsBase() {
                 msgText shouldBe EXECUTION_INTERRUPTED_MESSAGE
             },
         ) shouldBe null
+    }
+
+    @Test
+    @Disabled
+    fun testBigDataFrame() {
+        doExecute(
+            """
+                %use dataframe
+                DataFrame.read("https://api.apis.guru/v2/list.json")
+            """.trimIndent(),
+            ioPubChecker = { iopubSocket ->
+                iopubSocket.receiveDisplayDataResponse()
+                iopubSocket.receiveDisplayDataResponse()
+            },
+        )
     }
 }

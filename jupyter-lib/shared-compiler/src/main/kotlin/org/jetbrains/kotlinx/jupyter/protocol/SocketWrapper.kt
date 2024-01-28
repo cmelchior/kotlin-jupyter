@@ -80,7 +80,7 @@ class SocketWrapper(
         sendMore(MESSAGE_DELIMITER)
 
         val properties = listOf(RawMessage::header, RawMessage::parentHeader, RawMessage::metadata, RawMessage::content)
-        val signableMsg = properties.map { prop -> prop.get(msg)?.let { Json.encodeToString(it) }?.toByteArray() ?: emptyJsonObjectStringBytes }
+        val signableMsg = properties.map { prop -> prop.get(msg)?.let { MessageFormat.encodeToString(it) }?.toByteArray() ?: emptyJsonObjectStringBytes }
         sendMore(hmac(signableMsg) ?: "")
         for (i in 0 until (signableMsg.size - 1)) {
             sendMore(signableMsg[i])
@@ -130,10 +130,6 @@ class SocketWrapper(
             metadata.parseJson()?.jsonObject,
             content.parseJson().orEmptyObject(),
         )
-    }
-
-    private fun assertNotCancelled() {
-        if (isCancelled()) throw InterruptedException()
     }
 
     override fun close() {

@@ -16,17 +16,19 @@ import jupyter.kotlin.JavaRuntime
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
-import org.jetbrains.kotlinx.jupyter.OutputConfig
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplCompilerException
 import org.jetbrains.kotlinx.jupyter.exceptions.ReplEvalRuntimeException
 import org.jetbrains.kotlinx.jupyter.generateDiagnostic
 import org.jetbrains.kotlinx.jupyter.generateDiagnosticFromAbsolute
 import org.jetbrains.kotlinx.jupyter.repl.CompletionResult
 import org.jetbrains.kotlinx.jupyter.repl.ListErrorsResult
+import org.jetbrains.kotlinx.jupyter.repl.OutputConfig
 import org.jetbrains.kotlinx.jupyter.test.getOrFail
 import org.jetbrains.kotlinx.jupyter.withPath
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import java.io.File
 import java.nio.file.Path
 import kotlin.script.experimental.api.SourceCode
@@ -397,14 +399,16 @@ class ReplTests : AbstractSingleReplTest() {
 
     @Test
     fun testOutputMagic() {
+        val options = repl.options
+
         eval("%output --max-cell-size=100500 --no-stdout")
-        repl.outputConfig shouldBe OutputConfig(
+        options.outputConfig shouldBe OutputConfig(
             cellOutputMaxSize = 100500,
             captureOutput = false,
         )
 
         eval("%output --max-buffer=42 --max-buffer-newline=33 --max-time=2000")
-        repl.outputConfig shouldBe OutputConfig(
+        options.outputConfig shouldBe OutputConfig(
             cellOutputMaxSize = 100500,
             captureOutput = false,
             captureBufferMaxSize = 42,
@@ -413,7 +417,7 @@ class ReplTests : AbstractSingleReplTest() {
         )
 
         eval("%output --reset-to-defaults")
-        repl.outputConfig shouldBe OutputConfig()
+        options.outputConfig shouldBe OutputConfig()
     }
 
     @Test
@@ -431,6 +435,7 @@ class ReplTests : AbstractSingleReplTest() {
     }
 
     @Test
+    @DisabledOnOs(OS.MAC)
     fun testNativeLibrary() {
         val libName = "GraphMolWrap"
         val testDataPath = "src/test/testData/nativeTest"

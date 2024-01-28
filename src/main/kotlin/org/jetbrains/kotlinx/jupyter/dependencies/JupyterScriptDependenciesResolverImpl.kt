@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.jetbrains.kotlinx.jupyter.config.getLogger
+import org.jetbrains.kotlinx.jupyter.repl.MavenRepositoryCoordinates
 import org.jetbrains.kotlinx.jupyter.resolvePath
 import java.io.File
 import kotlin.script.dependencies.ScriptContents
@@ -16,6 +17,7 @@ import kotlin.script.experimental.api.ScriptDiagnostic
 import kotlin.script.experimental.api.asSuccess
 import kotlin.script.experimental.api.makeFailureResult
 import kotlin.script.experimental.api.valueOrNull
+import kotlin.script.experimental.dependencies.ArtifactWithLocation
 import kotlin.script.experimental.dependencies.CompoundDependenciesResolver
 import kotlin.script.experimental.dependencies.ExternalDependenciesResolver
 import kotlin.script.experimental.dependencies.ExternalDependenciesResolver.Options
@@ -26,7 +28,7 @@ import kotlin.script.experimental.dependencies.impl.makeExternalDependenciesReso
 import kotlin.script.experimental.dependencies.impl.set
 import kotlin.script.experimental.dependencies.maven.MavenDependenciesResolver
 
-open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<RepositoryCoordinates>) : JupyterScriptDependenciesResolver {
+open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<MavenRepositoryCoordinates>) : JupyterScriptDependenciesResolver {
 
     private val log = getLogger("resolver")
 
@@ -58,7 +60,7 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
     init {
         resolver = CompoundDependenciesResolver(
             FileSystemDependenciesResolver(),
-            RemoteResolverWrapper(MavenDependenciesResolver()),
+            RemoteResolverWrapper(MavenDependenciesResolver(true)),
         )
         mavenRepositories.forEach { addRepository(Repo(it)) }
     }
@@ -72,11 +74,11 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
     }
 
     private fun addRepository(repo: Repo): Boolean {
-        val repoIndex = repositories.indexOfFirst { it.coordinates.string == repo.coordinates.string }
+        val repoIndex = repositories.indexOfFirst { it.repo == repo.repo }
         if (repoIndex != -1) repositories.removeAt(repoIndex)
         repositories.add(repo)
 
-        return resolver.addRepository(repo.coordinates, repo.options, null).valueOrNull() == true
+        return resolver.addRepository(RepositoryCoordinates(repo.repo.coordinates), repo.options, null).valueOrNull() == true
     }
 
     override fun popAddedClasspath(): List<File> {
@@ -95,6 +97,7 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
         val scriptDiagnostics = mutableListOf<ScriptDiagnostic>()
         val classpath = mutableListOf<File>()
         var existingRepositories: List<Repo>? = null
+        val dependsOnAnnotations = mutableListOf<String>()
 
         script.annotations.forEach { annotation ->
             when (annotation) {
@@ -112,7 +115,7 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
                     } else {
                         Options.Empty
                     }
-                    val repo = Repo(RepositoryCoordinates(annotation.value), options)
+                    val repo = Repo(MavenRepositoryCoordinates(annotation.value), options)
 
                     if (!addRepository(repo)) {
                         throw IllegalArgumentException("Illegal argument for Repository annotation: $annotation")
@@ -121,42 +124,49 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
                     existingRepositories?.forEach { addRepository(it) }
                 }
                 is DependsOn -> {
-                    log.info("Resolving ${annotation.value}")
-                    try {
-                        tryResolve(
-                            annotation.value,
-                            scriptDiagnostics,
-                            classpath,
-                        )
-                    } catch (e: Exception) {
-                        val diagnostic = ScriptDiagnostic(ScriptDiagnostic.unspecifiedError, "Unhandled exception during resolve", exception = e)
-                        log.error(diagnostic.message, e)
-                        scriptDiagnostics.add(diagnostic)
-                    }
-                    // Hack: after first resolution add "standard" Central repo to the end of the list, giving it the lowest priority
-                    addRepository(CENTRAL_REPO)
+                    dependsOnAnnotations.add(annotation.value)
                 }
                 else -> throw Exception("Unknown annotation ${annotation.javaClass}")
             }
         }
 
-        return if (scriptDiagnostics.isEmpty()) classpath.asSuccess()
-        else makeFailureResult(scriptDiagnostics)
+        try {
+            tryResolve(
+                dependsOnAnnotations,
+                scriptDiagnostics,
+                classpath,
+            )
+        } catch (e: Exception) {
+            val diagnostic = ScriptDiagnostic(ScriptDiagnostic.unspecifiedError, "Unhandled exception during resolve", exception = e)
+            log.error(diagnostic.message, e)
+            scriptDiagnostics.add(diagnostic)
+        }
+        // Hack: after first resolution add "standard" Central repo to the end of the list, giving it the lowest priority
+        addRepository(CENTRAL_REPO)
+
+        return makeResolutionResult(classpath, scriptDiagnostics)
+    }
+
+    private suspend fun resolveWithOptions(annotationArgs: List<String>, options: Options): ResultWithDiagnostics<List<File>> {
+        return resolver.resolve(annotationArgs.map { ArtifactWithLocation(it, null) }, options)
     }
 
     private fun tryResolve(
-        annotationArg: String,
+        annotationArgs: List<String>,
         scriptDiagnosticsResult: MutableList<ScriptDiagnostic>,
         classpathResult: MutableList<File>,
     ) {
+        if (annotationArgs.isEmpty()) return
+
+        log.info("Resolving $annotationArgs")
         doResolve(
-            { resolver.resolve(annotationArg, resolverOptions, null) },
+            { resolveWithOptions(annotationArgs, resolverOptions) },
             onResolved = { files ->
                 addedClasspath.addAll(files)
                 classpathResult.addAll(files)
             },
             onFailure = { result ->
-                val diagnostics = ScriptDiagnostic(ScriptDiagnostic.unspecifiedError, "Failed to resolve $annotationArg:\n" + result.reports.joinToString("\n") { it.message })
+                val diagnostics = ScriptDiagnostic(ScriptDiagnostic.unspecifiedError, "Failed to resolve $annotationArgs:\n" + result.reports.joinToString("\n") { it.message })
                 log.warn(diagnostics.message, diagnostics.exception)
                 scriptDiagnosticsResult.add(diagnostics)
             },
@@ -164,29 +174,32 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
 
         if (resolveSources) {
             doResolve(
-                { resolver.resolve(annotationArg, sourcesResolverOptions, null) },
+                { resolveWithOptions(annotationArgs, sourcesResolverOptions) },
                 onResolved = { files ->
                     addedSourcesClasspath.addAll(files)
                 },
                 onFailure = { result ->
-                    log.warn("Failed to resolve sources for $annotationArg:\n" + result.reports.joinToString("\n") { it.message })
+                    log.warn("Failed to resolve sources for $annotationArgs:\n" + result.reports.joinToString("\n") { it.message })
                 },
             )
         }
 
         if (resolveMpp) {
             doResolve(
-                { resolver.resolve(annotationArg, mppResolverOptions, null) },
+                { resolveWithOptions(annotationArgs, mppResolverOptions) },
                 onResolved = { files ->
-                    val resolvedArtifacts = mutableSetOf(annotationArg)
+                    val resolvedArtifacts = mutableSetOf<String>()
+                    resolvedArtifacts.addAll(annotationArgs)
                     resolveMpp(files) { artifactCoordinates ->
-                        if (resolvedArtifacts.add(artifactCoordinates)) {
-                            tryResolve(
-                                artifactCoordinates,
-                                scriptDiagnosticsResult,
-                                classpathResult,
-                            )
+                        val notYetResolvedArtifacts = artifactCoordinates.filter { artifact ->
+                            resolvedArtifacts.add(artifact)
                         }
+
+                        tryResolve(
+                            notYetResolvedArtifacts,
+                            scriptDiagnosticsResult,
+                            classpathResult,
+                        )
                     }
                 },
                 onFailure = {},
@@ -210,7 +223,7 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
         }
     }
 
-    private fun resolveMpp(moduleFiles: List<File>, jvmArtifactCallback: (String) -> Unit) {
+    private fun resolveMpp(moduleFiles: List<File>, jvmArtifactCallback: (List<String>) -> Unit) {
         val coordinates = mutableListOf<String>()
 
         for (moduleFile in moduleFiles) {
@@ -235,16 +248,24 @@ open class JupyterScriptDependenciesResolverImpl(mavenRepositories: List<Reposit
                 coordinates.add(artifactCoordinates)
             }
         }
-        coordinates.forEach(jvmArtifactCallback)
+        jvmArtifactCallback(coordinates)
+    }
+
+    private fun makeResolutionResult(
+        classpath: List<File>,
+        scriptDiagnostics: List<ScriptDiagnostic>,
+    ): ResultWithDiagnostics<List<File>> {
+        return if (scriptDiagnostics.isEmpty()) classpath.asSuccess()
+        else makeFailureResult(scriptDiagnostics)
     }
 
     private class Repo(
-        val coordinates: RepositoryCoordinates,
+        val repo: MavenRepositoryCoordinates,
         val options: Options = Options.Empty,
     )
 
     companion object {
-        private val CENTRAL_REPO_COORDINATES = RepositoryCoordinates("https://repo1.maven.org/maven2/")
+        private val CENTRAL_REPO_COORDINATES = MavenRepositoryCoordinates("https://repo1.maven.org/maven2/")
         private val CENTRAL_REPO = Repo(CENTRAL_REPO_COORDINATES)
     }
 }

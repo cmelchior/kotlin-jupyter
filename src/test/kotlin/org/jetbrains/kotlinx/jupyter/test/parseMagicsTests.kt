@@ -1,15 +1,11 @@
 package org.jetbrains.kotlinx.jupyter.test
 
-import org.jetbrains.kotlinx.jupyter.ExecutedCodeLogging
-import org.jetbrains.kotlinx.jupyter.OutputConfig
-import org.jetbrains.kotlinx.jupyter.ReplOptions
 import org.jetbrains.kotlinx.jupyter.api.libraries.LibraryDefinition
 import org.jetbrains.kotlinx.jupyter.compiler.util.CodeInterval
 import org.jetbrains.kotlinx.jupyter.compiler.util.SourceCodeImpl
-import org.jetbrains.kotlinx.jupyter.defaultRuntimeProperties
+import org.jetbrains.kotlinx.jupyter.config.defaultRuntimeProperties
 import org.jetbrains.kotlinx.jupyter.libraries.AbstractLibraryResolutionInfo
 import org.jetbrains.kotlinx.jupyter.libraries.EmptyResolutionInfoProvider
-import org.jetbrains.kotlinx.jupyter.libraries.KERNEL_LIBRARIES
 import org.jetbrains.kotlinx.jupyter.libraries.LibrariesProcessorImpl
 import org.jetbrains.kotlinx.jupyter.libraries.ResolutionInfoSwitcher
 import org.jetbrains.kotlinx.jupyter.libraries.getDefinitions
@@ -17,7 +13,10 @@ import org.jetbrains.kotlinx.jupyter.libraries.parseReferenceWithArgs
 import org.jetbrains.kotlinx.jupyter.magics.FullMagicsHandler
 import org.jetbrains.kotlinx.jupyter.magics.MagicsProcessor
 import org.jetbrains.kotlinx.jupyter.magics.NoopMagicsHandler
-import org.jetbrains.kotlinx.jupyter.toSourceCodePositionWithNewAbsolute
+import org.jetbrains.kotlinx.jupyter.repl.ExecutedCodeLogging
+import org.jetbrains.kotlinx.jupyter.repl.OutputConfig
+import org.jetbrains.kotlinx.jupyter.repl.ReplOptions
+import org.jetbrains.kotlinx.jupyter.util.toSourceCodePositionWithNewAbsolute
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -135,14 +134,10 @@ class ParseArgumentsTests {
 class ParseMagicsTests {
 
     private class TestReplOptions : ReplOptions {
-        override val currentBranch: String
-            get() = standardResolverBranch
-        override val librariesDir = KERNEL_LIBRARIES.localLibrariesDir
         override var trackClasspath = false
         override var executedCodeLogging = ExecutedCodeLogging.OFF
         override var writeCompiledClasses = false
         override var outputConfig = OutputConfig()
-        override val debugPort: Int? = null
     }
 
     private val options = TestReplOptions()
